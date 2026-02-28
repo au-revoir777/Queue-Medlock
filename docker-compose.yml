@@ -1,0 +1,232 @@
+services:
+
+  # --------------------------------------------------
+  # DATABASE
+  # --------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: medlock_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./infra/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+
+  # --------------------------------------------------
+  # REDIS
+  # --------------------------------------------------
+  redis:
+    image: redis:7
+    container_name: medlock_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+
+  # --------------------------------------------------
+  # AUTH SERVICE
+  # --------------------------------------------------
+  auth-service:
+    build: ./control-plane/auth-service
+    container_name: medlock_auth
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+
+  # --------------------------------------------------
+  # TENANT SERVICE
+  # --------------------------------------------------
+  tenant-service:
+    build: ./control-plane/tenant-service
+    container_name: medlock_tenant
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AUTH_URL: http://auth-service:8000/register
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # KMS SERVICE
+  # --------------------------------------------------
+  kms-service:
+    build: ./control-plane/kms-service
+    container_name: medlock_kms
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # BROKER
+  # --------------------------------------------------
+  broker:
+    build: ./broker
+    container_name: medlock_broker
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_VALIDATE_URL: http://auth-service:8000/validate
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://127.0.0.1:9000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # FRONTEND
+  # --------------------------------------------------
+  frontend:
+    build: ./frontend
+    container_name: medlock_frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - medlock-net
+    restart: unless-stopped
+
+  # --------------------------------------------------
+  # API GATEWAY
+  # --------------------------------------------------
+  gateway:
+    image: nginx:1.27
+    container_name: medlock_gateway
+    ports:
+      - "8080:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+      kms-service:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # PROMETHEUS
+  # --------------------------------------------------
+  prometheus:
+    image: prom/prometheus
+    container_name: medlock_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      broker:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # GRAFANA
+  # --------------------------------------------------
+  grafana:
+    image: grafana/grafana
+    container_name: medlock_grafana
+    ports:
+      - "3100:3000"
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  # --------------------------------------------------
+  # SIMULATOR
+  # --------------------------------------------------
+  simulator:
+    build: ./simulator
+    container_name: medlock_simulator
+    command: python simulator.py
+    environment:
+      AUTH_URL: http://auth-service:8000/login
+      TENANT_URL: http://tenant-service:8000
+      KMS_URL: http://kms-service:8000
+      BROKER_URL: http://broker:9000
+      SIM_PASSWORD: ${SIM_PASSWORD}
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+      kms-service:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+
+networks:
+  medlock-net:
+    driver: bridge

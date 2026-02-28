@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "broker"
+    static_configs:
+      - targets: ["broker:9000"]
+
+  - job_name: "auth-service"
+    static_configs:
+      - targets: ["auth-service:8000"]
+
+  - job_name: "tenant-service"
+    static_configs:
+      - targets: ["tenant-service:8000"]
+
+  - job_name: "kms-service"
+    static_configs:
+      - targets: ["kms-service:8000"]

@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS hospitals (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  hospital_id TEXT NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
+  name TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS staff (
+  id TEXT PRIMARY KEY,
+  hospital_id TEXT NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  public_sign_key TEXT NOT NULL,
+  public_kx_key TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  producer_id TEXT NOT NULL,
+  department TEXT NOT NULL,
+  sequence BIGINT NOT NULL,
+  verified BOOLEAN NOT NULL DEFAULT FALSE
+);
