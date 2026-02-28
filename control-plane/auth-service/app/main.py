@@ -9,7 +9,9 @@ app = FastAPI(title="MedLock Auth Service")
 # -----------------------------
 # In-memory registries
 # -----------------------------
-user_registry: dict[tuple[str, str], str] = {}
+user_registry: dict[tuple[str, str], dict] = (
+    {}
+)  # (hospital_id, staff_id) → {password_hash, department}
 token_registry: dict[str, dict] = {}
 
 # -----------------------------
@@ -55,6 +57,7 @@ class RegisterPayload(BaseModel):
     hospital_id: str
     staff_id: str
     password: str
+    department: str  # ← added: required at registration time
 
 
 class LoginPayload(BaseModel):
@@ -79,7 +82,12 @@ def register(payload: RegisterPayload):
         raise HTTPException(status_code=409, detail="User already exists")
 
     hashed = hashlib.sha256(payload.password.encode()).hexdigest()
-    user_registry[key] = hashed
+
+    # Store password hash AND department together
+    user_registry[key] = {
+        "password_hash": hashed,
+        "department": payload.department,
+    }
 
     registrations_total.labels(hospital_id=payload.hospital_id).inc()
 
@@ -97,7 +105,7 @@ def login(payload: LoginPayload):
 
     hashed_input = hashlib.sha256(payload.password.encode()).hexdigest()
 
-    if user_registry[key] != hashed_input:
+    if user_registry[key]["password_hash"] != hashed_input:
         login_failure_total.labels(hospital_id=payload.hospital_id).inc()
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -106,9 +114,11 @@ def login(payload: LoginPayload):
     token_raw = f"{payload.hospital_id}{payload.staff_id}{time.time()}"
     token = hashlib.sha256(token_raw.encode()).hexdigest()
 
+    # Token now carries department so the broker can enforce dept-level access
     token_registry[token] = {
         "hospital_id": payload.hospital_id,
         "staff_id": payload.staff_id,
+        "department": user_registry[key]["department"],  # ← added
         "issued_at": time.time(),
     }
 

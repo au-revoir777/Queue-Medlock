@@ -227,6 +227,29 @@ services:
       broker:
         condition: service_healthy
 
+  attacker:
+    build:
+      context: ./simulator
+    command: python /app/attacker.py
+    volumes:
+      - ./attacker.py:/app/attacker.py
+    environment:
+      SIM_PASSWORD: ${SIM_PASSWORD}
+      AUTH_URL: http://auth-service:8000/login
+      TENANT_URL: http://tenant-service:8000
+      BROKER_URL: http://broker:9000
+    depends_on:
+      broker:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+    networks:
+      - medlock-net        # ← was your_network_name
+    profiles:
+      - attack
+
 networks:
   medlock-net:
     driver: bridge

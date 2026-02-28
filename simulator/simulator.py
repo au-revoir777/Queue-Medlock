@@ -3,14 +3,15 @@ MedLock Traffic Simulator - Normal Messages Test (Fixed)
 ========================================================
 - Registers hospitals and staff
 - Sends encrypted messages to the broker
-- Fetches and decrypts messages
-- Logs decrypted messages reliably
+- Fetches and decrypts messages via Redis Consumer Groups
+- ACKs messages after successful decryption
+- One producer/consumer pair per department per hospital
+- Each message printed exactly once
 """
 
 import os
 import requests
 import random
-import string
 import time
 import threading
 import logging
@@ -39,8 +40,13 @@ TENANT_URL = os.environ.get("TENANT_URL", "http://tenant-service:8000")
 BROKER_URL = os.environ.get("BROKER_URL", "http://broker:9000")
 
 HOSPITALS = ["hospital1", "hospital2"]
-DEPARTMENTS = ["cardiology", "radiology", "icu"]
+
+# 5 departments — one producer/consumer pair will be created per dept per hospital
+DEPARTMENTS = ["cardiology", "radiology", "icu", "neurology", "oncology"]
+
 ROLES = ["doctor", "nurse", "admin"]
+
+PENDING_RECLAIM_IDLE_MS = 30_000
 
 
 # ----------------------------------------------------------------
@@ -68,7 +74,7 @@ def safe_post(url: str, json: dict, retries: int = 5, timeout: float = 3.0):
 
 
 # ----------------------------------------------------------------
-# Crypto classes
+# Crypto
 # ----------------------------------------------------------------
 @dataclass
 class EncryptedPayload:
@@ -171,6 +177,7 @@ class StaffMember:
     hospital_id: str
     staff_id: str
     role: str
+    department: str
     token: str = None
     sequence: int = 1
     sign_key_obj: ed25519.Ed25519PrivateKey = field(
@@ -186,52 +193,168 @@ class StaffMember:
     def __post_init__(self):
         self.sign_key = _b64(
             self.sign_key_obj.private_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PrivateFormat.Raw,
-                encryption_algorithm=serialization.NoEncryption(),
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
             )
         )
         self.kx_private = _b64(
             self.kx_private_obj.private_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PrivateFormat.Raw,
-                encryption_algorithm=serialization.NoEncryption(),
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
             )
         )
         self.kx_public = _b64(
             self.kx_private_obj.public_key().public_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PublicFormat.Raw,
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
             )
         )
 
 
 # ----------------------------------------------------------------
-# Simulator
+# Consumer group helpers
 # ----------------------------------------------------------------
-def simulate_tenant(hospital_id: str):
-    staff_list = []
+def cg_dequeue(hospital_id: str, dept: str, consumer_id: str) -> list:
+    resp = requests.get(
+        f"{BROKER_URL}/cg-dequeue/{hospital_id}/{dept}",
+        params={"consumer_id": consumer_id, "count": "10"},
+        timeout=3,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("items", [])
+    log.warning(
+        "cg-dequeue failed [%s/%s]: %d %s",
+        hospital_id,
+        dept,
+        resp.status_code,
+        resp.text[:80],
+    )
+    return []
+
+
+def cg_ack(hospital_id: str, dept: str, consumer_id: str, message_ids: list) -> None:
+    if not message_ids:
+        return
+    resp = requests.post(
+        f"{BROKER_URL}/cg-ack/{hospital_id}/{dept}",
+        json={"consumer_id": consumer_id, "message_ids": message_ids},
+        timeout=3,
+    )
+    if resp.status_code != 200:
+        log.warning(
+            "cg-ack failed [%s/%s]: %d %s",
+            hospital_id,
+            dept,
+            resp.status_code,
+            resp.text[:80],
+        )
+
+
+def cg_reclaim_pending(hospital_id: str, dept: str, consumer_id: str) -> list:
+    resp = requests.get(
+        f"{BROKER_URL}/cg-pending/{hospital_id}/{dept}",
+        params={
+            "consumer_id": consumer_id,
+            "min_idle_ms": str(PENDING_RECLAIM_IDLE_MS),
+            "count": "10",
+        },
+        timeout=3,
+    )
+    if resp.status_code == 200:
+        items = resp.json().get("items", [])
+        if items:
+            log.warning(
+                "Reclaimed %d pending message(s) in %s/%s",
+                len(items),
+                hospital_id,
+                dept,
+            )
+        return items
+    log.warning(
+        "cg-pending failed [%s/%s]: %d %s",
+        hospital_id,
+        dept,
+        resp.status_code,
+        resp.text[:80],
+    )
+    return []
+
+
+def process_items(
+    items: list,
+    *,
+    hospital_id: str,
+    dept: str,
+    consumer_id: str,
+    consumer: StaffMember,
+    producer: StaffMember,
+) -> None:
+    """Decrypt each item, log it, ACK only the ones that succeeded."""
+    ack_ids = []
+    for item in items:
+        try:
+            plaintext = decrypt_item(
+                hospital_id=hospital_id,
+                department_id=dept,
+                producer_id=item["producer_id"],
+                sequence=item["sequence"],
+                nonce_b64=item["nonce"],
+                ciphertext_b64=item["ciphertext"],
+                envelope=item.get("envelope", {}),
+                consumer_private_kx_obj=consumer.kx_private_obj,
+                producer_signing_public_obj=producer.sign_key_obj.public_key(),
+            )
+            log.info(
+                "Decrypted [%s/%s] [%s]: %s", hospital_id, dept, item["id"], plaintext
+            )
+            ack_ids.append(item["id"])
+        except Exception as exc:
+            log.warning(
+                "Decryption failed [%s/%s] id=%s: %s",
+                hospital_id,
+                dept,
+                item["id"],
+                exc,
+            )
+
+    cg_ack(hospital_id, dept, consumer_id, ack_ids)
+
+
+# ----------------------------------------------------------------
+# Per-department simulation loop
+# Runs in its own thread: one thread per (hospital, department) pair.
+# ----------------------------------------------------------------
+def simulate_department(hospital_id: str, dept: str):
+    """Owns one producer + one consumer for a single hospital/department."""
+    producer = None
+    consumer = None
 
     while True:
         try:
-            # Create a single producer and consumer staff for this hospital
-            if not staff_list:
+            # ---- First-time setup: create and register staff ----
+            if producer is None:
                 producer = StaffMember(
-                    hospital_id, f"{hospital_id}_producer", random.choice(ROLES)
+                    hospital_id=hospital_id,
+                    staff_id=f"{hospital_id}_{dept}_producer",
+                    role=random.choice(ROLES),
+                    department=dept,
                 )
                 consumer = StaffMember(
-                    hospital_id, f"{hospital_id}_consumer", random.choice(ROLES)
+                    hospital_id=hospital_id,
+                    staff_id=f"{hospital_id}_{dept}_consumer",
+                    role=random.choice(ROLES),
+                    department=dept,
                 )
-                staff_list.extend([producer, consumer])
 
-                # Register both
-                for s in staff_list:
+                for s in (producer, consumer):
                     resp = safe_post(
                         f"{TENANT_URL}/staff/register",
                         json={
                             "id": s.staff_id,
                             "hospital_id": s.hospital_id,
                             "role": s.role,
+                            "department": s.department,
                             "public_sign_key": s.sign_key,
                             "public_kx_key": s.kx_public,
                         },
@@ -244,24 +367,27 @@ def simulate_tenant(hospital_id: str):
                             resp.text[:80],
                         )
 
-            # Authenticate
-            for s in staff_list:
+            # ---- Authenticate (refresh token every loop) ----
+            for s in (producer, consumer):
                 resp = safe_post(
                     AUTH_URL,
                     json={
                         "hospital_id": s.hospital_id,
                         "staff_id": s.staff_id,
-                        "password": SIM_PASSWORD,
+                        "password": "pass123",
                     },
                 )
                 if resp is not None and resp.status_code in (200, 201):
                     s.token = resp.json().get("access_token")
+                else:
+                    log.warning(
+                        "Auth failed for %s: %s",
+                        s.staff_id,
+                        resp.text[:80] if resp else "no response",
+                    )
 
-            producer, consumer = staff_list
-
-            # Send messages
+            # ---- Produce: send 3 messages to this department ----
             for _ in range(3):
-                dept = random.choice(DEPARTMENTS)
                 msg_text = f"Hello from {producer.staff_id} in {dept}"
                 payload = build_encrypted_payload(
                     hospital_id=producer.hospital_id,
@@ -281,47 +407,55 @@ def simulate_tenant(hospital_id: str):
                     "ciphertext": payload.ciphertext,
                     "envelope": payload.envelope,
                 }
-                headers = {"Authorization": f"Bearer {producer.token}"}
                 resp = requests.post(
-                    f"{BROKER_URL}/enqueue", json=body, headers=headers, timeout=3
+                    f"{BROKER_URL}/enqueue",
+                    json=body,
+                    headers={"Authorization": f"Bearer {producer.token}"},
+                    timeout=3,
                 )
                 if resp is not None and resp.status_code == 200:
-                    log.info("Enqueued message: %s", msg_text)
+                    log.info("Enqueued [%s/%s]: %s", hospital_id, dept, msg_text)
                     producer.sequence += 1
                 else:
                     log.warning(
-                        "Broker enqueue failed: %s %s",
+                        "Enqueue failed [%s/%s]: %s %s",
+                        hospital_id,
+                        dept,
                         resp.status_code if resp else None,
                         resp.text[:80] if resp else "",
                     )
 
-            # Fetch and decrypt messages
-            for dept in DEPARTMENTS:
-                resp = requests.get(
-                    f"{BROKER_URL}/dequeue/{producer.hospital_id}/{dept}", timeout=3
+            # ---- Consume: reclaim pending then fetch new ----
+            consumer_id = consumer.staff_id
+
+            pending = cg_reclaim_pending(hospital_id, dept, consumer_id)
+            if pending:
+                process_items(
+                    pending,
+                    hospital_id=hospital_id,
+                    dept=dept,
+                    consumer_id=consumer_id,
+                    consumer=consumer,
+                    producer=producer,
                 )
-                if resp is not None and resp.status_code == 200:
-                    items = resp.json().get("items", [])
-                    for item in items:
-                        try:
-                            plaintext = decrypt_item(
-                                hospital_id=producer.hospital_id,
-                                department_id=dept,
-                                producer_id=item["producer_id"],
-                                sequence=item["sequence"],
-                                nonce_b64=item["nonce"],
-                                ciphertext_b64=item["ciphertext"],
-                                envelope=item.get("envelope", {}),
-                                consumer_private_kx_obj=consumer.kx_private_obj,
-                                producer_signing_public_obj=producer.sign_key_obj.public_key(),
-                            )
-                            log.info("Decrypted message: %s", plaintext)
-                        except Exception as exc:
-                            log.warning("Decryption failed: %s", exc)
+
+            new_items = cg_dequeue(hospital_id, dept, consumer_id)
+            if new_items:
+                process_items(
+                    new_items,
+                    hospital_id=hospital_id,
+                    dept=dept,
+                    consumer_id=consumer_id,
+                    consumer=consumer,
+                    producer=producer,
+                )
 
         except Exception as exc:
             log.exception(
-                "Unhandled error in simulate_tenant(%s): %s", hospital_id, exc
+                "Unhandled error in simulate_department(%s, %s): %s",
+                hospital_id,
+                dept,
+                exc,
             )
 
         time.sleep(2)
@@ -351,17 +485,20 @@ if __name__ == "__main__":
     log.info("Simulator starting...")
     create_hospitals()
 
+    # Spawn one thread per (hospital, department) pair
+    # 2 hospitals × 5 departments = 10 threads total
     threads = []
     for hospital in HOSPITALS:
-        t = threading.Thread(
-            target=simulate_tenant,
-            args=(hospital,),
-            name=f"sim-{hospital}",
-            daemon=True,
-        )
-        t.start()
-        threads.append(t)
-        log.info("Started simulation for %s", hospital)
+        for dept in DEPARTMENTS:
+            t = threading.Thread(
+                target=simulate_department,
+                args=(hospital, dept),
+                name=f"sim-{hospital}-{dept}",
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+            log.info("Started simulation for %s / %s", hospital, dept)
 
     while True:
         time.sleep(5)

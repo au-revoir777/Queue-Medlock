@@ -65,6 +65,7 @@ class StaffRegister(BaseModel):
     id: str
     hospital_id: str
     role: str
+    department: str  # added: required, forwarded to auth service
     public_sign_key: str
     public_kx_key: str
 
@@ -102,6 +103,7 @@ def register_staff(payload: StaffRegister):
             "hospital_id": payload.hospital_id,
             "staff_id": payload.id,
             "password": "pass123",
+            "department": payload.department,  # forwarded to auth
         },
         timeout=3,
     )
