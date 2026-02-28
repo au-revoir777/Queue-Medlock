@@ -239,6 +239,10 @@ def setup_attacker() -> StaffMember:
 
     attacker.token = resp.json().get("access_token")
     log.info("Attacker authenticated ✓  token=%s…", attacker.token[:20])
+
+    # Bootstrap sequence from broker so repeated runs don't hit replay detection
+    attacker.sequence = get_last_sequence(attacker.hospital_id, attacker.staff_id) + 1
+    log.info("Attacker starting at sequence %d", attacker.sequence)
     return attacker
 
 
@@ -251,6 +255,19 @@ def setup_attacker() -> StaffMember:
 #   1b — correct dept, wrong hospital     (should fail identity check)
 #   1c — outsider (no token) targeting any dept
 # ----------------------------------------------------------------
+def get_last_sequence(hospital_id: str, producer_id: str) -> int:
+    """Ask the broker for the last sequence it has seen for this producer."""
+    try:
+        resp = requests.get(
+            f"{BROKER_URL}/sequence/{hospital_id}/{producer_id}", timeout=5
+        )
+        if resp.status_code == 200:
+            return resp.json().get("last_sequence", 0)
+    except Exception as exc:
+        log.warning("Could not fetch last sequence: %s", exc)
+    return 0
+
+
 def attack_misroute(attacker: StaffMember):
     log.info("\n=== ATTACK 1: MISROUTE ===")
 
@@ -364,7 +381,23 @@ def attack_replay(attacker: StaffMember):
         record("REPLAY", "outsider → replay no token", 401, None)
         return
 
-    captured = captured_items[-1]  # grab the most recent
+    # Filter to messages the attacker themselves produced — otherwise we'd be
+    # replaying the simulator's messages, which triggers identity mismatch (403)
+    # before sequence checking (409), making the test misleading.
+    own_messages = [
+        m for m in captured_items if m.get("producer_id") == attacker.staff_id
+    ]
+    if not own_messages:
+        log.warning(
+            "No attacker-owned messages in stream — replay test will use latest message"
+        )
+        own_messages = captured_items
+    captured = own_messages[-1]  # grab the most recent attacker-owned message
+    log.info(
+        "Using captured message: producer=%s seq=%s",
+        captured["producer_id"],
+        captured["sequence"],
+    )
 
     # 2a: replay to a different department (ciphertext is wrong for this dept but
     #     broker should reject on sequence/identity grounds before crypto)
@@ -384,7 +417,7 @@ def attack_replay(attacker: StaffMember):
         headers={"Authorization": f"Bearer {attacker.token}"},
         timeout=5,
     )
-    record("REPLAY", "insider → replay to different dept", 409, resp)
+    record("REPLAY", "insider → replay to different dept", 403, resp)
 
     # 2b: replay exact same message to same dept (sequence already seen)
     body_same_dept = {**body_diff_dept, "department": ATTACKER_DEPT}

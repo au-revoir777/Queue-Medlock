@@ -7,7 +7,6 @@ const app = express();
 app.use(express.json());
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-
 const AUTH_VALIDATE_URL = process.env.AUTH_VALIDATE_URL || 'http://localhost:8001/validate';
 
 // -----------------------------
@@ -50,9 +49,7 @@ async function validateToken(authHeader) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     throw new Error('Missing token');
   }
-
   const token = authHeader.split(' ')[1];
-
   const response = await axios.post(AUTH_VALIDATE_URL, { token });
   return response.data;
 }
@@ -64,11 +61,28 @@ async function ensureGroup(stream, group) {
   try {
     await redis.xgroup('CREATE', stream, group, '0', 'MKSTREAM');
   } catch (err) {
-    if (!err.message.includes('BUSYGROUP')) {
-      throw err;
-    }
+    if (!err.message.includes('BUSYGROUP')) throw err;
   }
 }
+
+// -----------------------------
+// Sequence Bootstrap
+//
+// GET /sequence/:hospital/:producer_id
+//
+// Returns the last sequence number the broker has seen for this producer,
+// or 0 if none. Producers call this on startup to resume from where they
+// left off rather than restarting from 1 (which triggers replay detection).
+//
+// Unauthenticated intentionally — sequence numbers are not secret,
+// they are monotonic counters used only for replay protection.
+// -----------------------------
+app.get('/sequence/:hospital/:producer_id', async (req, res) => {
+  const { hospital, producer_id } = req.params;
+  const lastSeqKey = `seq:${hospital}:${producer_id}`;
+  const lastSeq = await redis.get(lastSeqKey);
+  return res.json({ last_sequence: lastSeq ? Number(lastSeq) : 0 });
+});
 
 // -----------------------------
 // Enqueue
@@ -77,26 +91,18 @@ app.post('/enqueue', async (req, res) => {
   try {
     const identity = await validateToken(req.headers.authorization);
 
-    const {
-      hospital,
-      department,
-      ciphertext,
-      nonce,
-      producer_id,
-      sequence,
-      envelope
-    } = req.body;
+    const { hospital, department, ciphertext, nonce, producer_id, sequence, envelope } = req.body;
 
     if (!hospital || !department || !ciphertext || !nonce || !producer_id || typeof sequence !== 'number') {
       validationFailures.inc();
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // 🔐 Enforce identity match: hospital, staff identity, AND department
+    // 🔐 Enforce identity match: hospital + staff_id + department
     if (
       identity.hospital_id !== hospital   ||
       identity.staff_id    !== producer_id ||
-      identity.department  !== department    // ← department-level check closes the misroute vulnerability
+      identity.department  !== department
     ) {
       validationFailures.inc();
       return res.status(403).json({ error: 'Identity mismatch' });
@@ -116,8 +122,7 @@ app.post('/enqueue', async (req, res) => {
     await redis.set(lastSeqKey, sequence);
 
     await redis.xadd(
-      stream,
-      '*',
+      stream, '*',
       'ciphertext', ciphertext,
       'nonce', nonce,
       'producer_id', producer_id,
@@ -126,7 +131,6 @@ app.post('/enqueue', async (req, res) => {
     );
 
     enqueueCounter.labels(hospital, department).inc();
-
     return res.json({ status: 'queued' });
 
   } catch {
@@ -136,10 +140,10 @@ app.post('/enqueue', async (req, res) => {
 });
 
 // -----------------------------
-// Dequeue (legacy — kept for backwards compatibility)
+// Dequeue (legacy — full stream scan, no ACK)
+// Kept for backwards compatibility and for the attacker script to capture messages.
 // -----------------------------
 app.get('/dequeue/:hospital/:department', async (req, res) => {
-
   const { hospital, department } = req.params;
   const stream = `hospital:${hospital}:dept:${department}`;
 
@@ -147,18 +151,13 @@ app.get('/dequeue/:hospital/:department', async (req, res) => {
 
   const parsed = messages.map(([id, fields]) => {
     const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) {
-      obj[fields[i]] = fields[i + 1];
-    }
+    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
     obj.sequence = Number(obj.sequence);
     obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
     return obj;
   }).reverse();
 
-  if (parsed.length > 0) {
-    dequeueCounter.labels(hospital, department).inc(parsed.length);
-  }
-
+  if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
   return res.json({ items: parsed });
 });
 
@@ -170,41 +169,27 @@ app.get('/cg-dequeue/:hospital/:department', async (req, res) => {
   const { hospital, department } = req.params;
   const { consumer_id, count = '10' } = req.query;
 
-  if (!consumer_id) {
-    return res.status(400).json({ error: 'consumer_id query param required' });
-  }
+  if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
 
   const stream = `hospital:${hospital}:dept:${department}`;
   const group = `${stream}-consumers`;
 
   await ensureGroup(stream, group);
 
-  const results = await redis.xreadgroup(
-    'GROUP', group, consumer_id,
-    'COUNT', count,
-    'STREAMS', stream, '>'
-  );
+  const results = await redis.xreadgroup('GROUP', group, consumer_id, 'COUNT', count, 'STREAMS', stream, '>');
 
-  if (!results || results.length === 0) {
-    return res.json({ items: [] });
-  }
+  if (!results || results.length === 0) return res.json({ items: [] });
 
   const [, messages] = results[0];
-
   const parsed = messages.map(([id, fields]) => {
     const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) {
-      obj[fields[i]] = fields[i + 1];
-    }
+    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
     obj.sequence = Number(obj.sequence);
     obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
     return obj;
   });
 
-  if (parsed.length > 0) {
-    dequeueCounter.labels(hospital, department).inc(parsed.length);
-  }
-
+  if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
   return res.json({ items: parsed });
 });
 
@@ -225,9 +210,7 @@ app.post('/cg-ack/:hospital/:department', async (req, res) => {
   const group = `${stream}-consumers`;
 
   const acked = await redis.xack(stream, group, ...message_ids);
-
   ackCounter.labels(hospital, department).inc(acked);
-
   return res.json({ acked });
 });
 
@@ -239,9 +222,7 @@ app.get('/cg-pending/:hospital/:department', async (req, res) => {
   const { hospital, department } = req.params;
   const { consumer_id, min_idle_ms = '30000', count = '10' } = req.query;
 
-  if (!consumer_id) {
-    return res.status(400).json({ error: 'consumer_id query param required' });
-  }
+  if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
 
   const stream = `hospital:${hospital}:dept:${department}`;
   const group = `${stream}-consumers`;
@@ -249,16 +230,12 @@ app.get('/cg-pending/:hospital/:department', async (req, res) => {
   await ensureGroup(stream, group);
 
   const [nextCursor, messages] = await redis.xautoclaim(
-    stream, group, consumer_id,
-    min_idle_ms, '0-0',
-    'COUNT', count
+    stream, group, consumer_id, min_idle_ms, '0-0', 'COUNT', count
   );
 
   const parsed = (messages || []).map(([id, fields]) => {
     const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) {
-      obj[fields[i]] = fields[i + 1];
-    }
+    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
     obj.sequence = Number(obj.sequence);
     obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
     return obj;
@@ -275,10 +252,6 @@ app.get('/metrics', async (req, res) => {
   res.end(await client.register.metrics());
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(9000, () => {
-  console.log('Untrusted Zero-Trust broker listening on :9000');
-});
+app.listen(9000, () => console.log('Zero-Trust broker listening on :9000'));
