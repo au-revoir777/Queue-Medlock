@@ -48,6 +48,7 @@ services:
     container_name: medlock_auth
     environment:
       JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "8000:8000"
     healthcheck:
@@ -58,6 +59,9 @@ services:
     networks:
       - medlock-net
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # --------------------------------------------------
   # TENANT SERVICE
