@@ -1,8 +1,20 @@
 import argparse
-
 import requests
-
 from .crypto import ReplayCache, decrypt_item
+
+
+def fetch_producer_signing_key(
+    broker_url: str, hospital: str, department: str, producer_id: str
+) -> str:
+    """Fetch the current signing public key for a producer from KMS via broker."""
+    resp = requests.get(
+        f"{broker_url}/keys/{hospital}/{department}/{producer_id}",
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()[
+        "public_sign_key"
+    ]  # adjust field name to match your KMS response
 
 
 def main():
@@ -11,15 +23,12 @@ def main():
     parser.add_argument("--department", required=True)
     parser.add_argument("--consumer-id", required=True)
     parser.add_argument("--consumer-kx-private-key", required=True)
-    parser.add_argument("--producer-signing-public-key", required=True)
+    # REMOVED: --producer-signing-public-key
     parser.add_argument("--broker-url", required=True)
-    # New: opt-in to consumer group mode (default: legacy mode)
     parser.add_argument(
         "--use-consumer-group",
         action="store_true",
         default=False,
-        help="Use Redis consumer group delivery (recommended). "
-        "Falls back to legacy full-stream scan if not set.",
     )
     args = parser.parse_args()
 
@@ -29,14 +38,8 @@ def main():
         _run_legacy(args)
 
 
-# ----------------------------------------------------------------
-# Legacy mode — full stream scan, no ACK, kept for backward compat
-# ----------------------------------------------------------------
 def _run_legacy(args):
     cache = ReplayCache()
-    # NOTE: legacy endpoint includes hospital in path, old CLI had a bug
-    # where it used /dequeue/<department> without hospital — kept as-is
-    # to avoid breaking existing scripts.
     response = requests.get(
         f"{args.broker_url}/dequeue/{args.hospital}/{args.department}", timeout=10
     )
@@ -50,25 +53,35 @@ def _run_legacy(args):
             )
             continue
 
-        plaintext = decrypt_item(
-            hospital_id=args.hospital,
-            department_id=args.department,
-            producer_id=item["producer_id"],
-            sequence=item["sequence"],
-            nonce_b64=item["nonce"],
-            ciphertext_b64=item["ciphertext"],
-            envelope=item.get("envelope", {}),
-            consumer_private_kx_b64=args.consumer_kx_private_key,
-            producer_signing_public_b64=args.producer_signing_public_key,
-        )
-        print(f"{item['producer_id']}#{item['sequence']}: {plaintext}")
+        # ✅ Fetch the correct key for THIS producer dynamically
+        try:
+            signing_key = fetch_producer_signing_key(
+                args.broker_url, args.hospital, args.department, item["producer_id"]
+            )
+        except Exception as exc:
+            print(f"KEY FETCH FAILED producer={item['producer_id']}: {exc}")
+            continue
+
+        try:
+            plaintext = decrypt_item(
+                hospital_id=args.hospital,
+                department_id=args.department,
+                producer_id=item["producer_id"],
+                sequence=item["sequence"],
+                nonce_b64=item["nonce"],
+                ciphertext_b64=item["ciphertext"],
+                envelope=item.get("envelope", {}),
+                consumer_private_kx_b64=args.consumer_kx_private_key,
+                producer_signing_public_b64=signing_key,  # ✅ per-producer key
+            )
+            print(f"{item['producer_id']}#{item['sequence']}: {plaintext}")
+        except Exception as exc:
+            print(
+                f"DECRYPT FAILED producer={item['producer_id']} seq={item['sequence']}: {exc}"
+            )
 
 
-# ----------------------------------------------------------------
-# Consumer group mode — fetch-decrypt-ACK, exactly-once delivery
-# ----------------------------------------------------------------
 def _run_consumer_group(args):
-    # Step 1: fetch new messages assigned to this consumer
     response = requests.get(
         f"{args.broker_url}/cg-dequeue/{args.hospital}/{args.department}",
         params={"consumer_id": args.consumer_id, "count": "10"},
@@ -80,6 +93,17 @@ def _run_consumer_group(args):
     ack_ids = []
 
     for item in items:
+        # ✅ Fetch the correct key for THIS producer dynamically
+        try:
+            signing_key = fetch_producer_signing_key(
+                args.broker_url, args.hospital, args.department, item["producer_id"]
+            )
+        except Exception as exc:
+            print(
+                f"KEY FETCH FAILED id={item['id']} producer={item['producer_id']}: {exc}"
+            )
+            continue  # Leave in PEL — will retry on next run
+
         try:
             plaintext = decrypt_item(
                 hospital_id=args.hospital,
@@ -90,16 +114,13 @@ def _run_consumer_group(args):
                 ciphertext_b64=item["ciphertext"],
                 envelope=item.get("envelope", {}),
                 consumer_private_kx_b64=args.consumer_kx_private_key,
-                producer_signing_public_b64=args.producer_signing_public_key,
+                producer_signing_public_b64=signing_key,  # ✅ per-producer key
             )
             print(f"{item['producer_id']}#{item['sequence']}: {plaintext}")
-            # Only ACK after successful decryption
             ack_ids.append(item["id"])
         except Exception as exc:
-            # Leave in PEL — will be reclaimed on next run
             print(f"DECRYPTION FAILED id={item['id']}: {exc}")
 
-    # Step 2: ACK successfully processed messages
     if ack_ids:
         ack_resp = requests.post(
             f"{args.broker_url}/cg-ack/{args.hospital}/{args.department}",

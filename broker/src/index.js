@@ -70,10 +70,6 @@ async function ensureGroup(stream, group) {
 //
 // GET /sequence/:hospital/:producer_id
 //
-// Returns the last sequence number the broker has seen for this producer,
-// or 0 if none. Producers call this on startup to resume from where they
-// left off rather than restarting from 1 (which triggers replay detection).
-//
 // Unauthenticated intentionally — sequence numbers are not secret,
 // they are monotonic counters used only for replay protection.
 // -----------------------------
@@ -141,107 +137,161 @@ app.post('/enqueue', async (req, res) => {
 
 // -----------------------------
 // Dequeue (legacy — full stream scan, no ACK)
-// Kept for backwards compatibility and for the attacker script to capture messages.
+// 🔐 Now requires a valid JWT. Consumer may only read from their own hospital.
 // -----------------------------
 app.get('/dequeue/:hospital/:department', async (req, res) => {
-  const { hospital, department } = req.params;
-  const stream = `hospital:${hospital}:dept:${department}`;
+  try {
+    const identity = await validateToken(req.headers.authorization);
+    const { hospital, department } = req.params;
 
-  const messages = await redis.xrevrange(stream, '+', '-', 'COUNT', 10);
+    // Consumer must belong to the same hospital they are reading from
+    if (identity.hospital_id !== hospital) {
+      validationFailures.inc();
+      return res.status(403).json({ error: 'Identity mismatch' });
+    }
 
-  const parsed = messages.map(([id, fields]) => {
-    const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
-    obj.sequence = Number(obj.sequence);
-    obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
-    return obj;
-  }).reverse();
+    const stream = `hospital:${hospital}:dept:${department}`;
+    const messages = await redis.xrevrange(stream, '+', '-', 'COUNT', 10);
 
-  if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
-  return res.json({ items: parsed });
+    const parsed = messages.map(([id, fields]) => {
+      const obj = { id };
+      for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+      obj.sequence = Number(obj.sequence);
+      obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
+      return obj;
+    }).reverse();
+
+    if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
+    return res.json({ items: parsed });
+
+  } catch {
+    validationFailures.inc();
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 // -----------------------------
 // Consumer Group Dequeue
 // GET /cg-dequeue/:hospital/:department?consumer_id=<id>&count=<n>
+// 🔐 Requires JWT. consumer_id must match token's staff_id.
 // -----------------------------
 app.get('/cg-dequeue/:hospital/:department', async (req, res) => {
-  const { hospital, department } = req.params;
-  const { consumer_id, count = '10' } = req.query;
+  try {
+    const identity = await validateToken(req.headers.authorization);
+    const { hospital, department } = req.params;
+    const { consumer_id, count = '10' } = req.query;
 
-  if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
+    if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
 
-  const stream = `hospital:${hospital}:dept:${department}`;
-  const group = `${stream}-consumers`;
+    // Consumer must belong to the hospital they are reading from,
+    // and consumer_id must match the authenticated staff_id
+    if (identity.hospital_id !== hospital || identity.staff_id !== consumer_id) {
+      validationFailures.inc();
+      return res.status(403).json({ error: 'Identity mismatch' });
+    }
 
-  await ensureGroup(stream, group);
+    const stream = `hospital:${hospital}:dept:${department}`;
+    const group = `${stream}-consumers`;
 
-  const results = await redis.xreadgroup('GROUP', group, consumer_id, 'COUNT', count, 'STREAMS', stream, '>');
+    await ensureGroup(stream, group);
 
-  if (!results || results.length === 0) return res.json({ items: [] });
+    const results = await redis.xreadgroup('GROUP', group, consumer_id, 'COUNT', count, 'STREAMS', stream, '>');
 
-  const [, messages] = results[0];
-  const parsed = messages.map(([id, fields]) => {
-    const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
-    obj.sequence = Number(obj.sequence);
-    obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
-    return obj;
-  });
+    if (!results || results.length === 0) return res.json({ items: [] });
 
-  if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
-  return res.json({ items: parsed });
+    const [, messages] = results[0];
+    const parsed = messages.map(([id, fields]) => {
+      const obj = { id };
+      for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+      obj.sequence = Number(obj.sequence);
+      obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
+      return obj;
+    });
+
+    if (parsed.length > 0) dequeueCounter.labels(hospital, department).inc(parsed.length);
+    return res.json({ items: parsed });
+
+  } catch {
+    validationFailures.inc();
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 // -----------------------------
 // Consumer Group ACK
 // POST /cg-ack/:hospital/:department
-// Body: { consumer_id: string, message_ids: string[] }
+// 🔐 Requires JWT. consumer_id must match token's staff_id.
 // -----------------------------
 app.post('/cg-ack/:hospital/:department', async (req, res) => {
-  const { hospital, department } = req.params;
-  const { consumer_id, message_ids } = req.body;
+  try {
+    const identity = await validateToken(req.headers.authorization);
+    const { hospital, department } = req.params;
+    const { consumer_id, message_ids } = req.body;
 
-  if (!consumer_id || !Array.isArray(message_ids) || message_ids.length === 0) {
-    return res.status(400).json({ error: 'consumer_id and non-empty message_ids required' });
+    if (!consumer_id || !Array.isArray(message_ids) || message_ids.length === 0) {
+      return res.status(400).json({ error: 'consumer_id and non-empty message_ids required' });
+    }
+
+    // Prevent one consumer from ACKing another consumer's messages
+    if (identity.hospital_id !== hospital || identity.staff_id !== consumer_id) {
+      validationFailures.inc();
+      return res.status(403).json({ error: 'Identity mismatch' });
+    }
+
+    const stream = `hospital:${hospital}:dept:${department}`;
+    const group = `${stream}-consumers`;
+
+    const acked = await redis.xack(stream, group, ...message_ids);
+    ackCounter.labels(hospital, department).inc(acked);
+    return res.json({ acked });
+
+  } catch {
+    validationFailures.inc();
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-
-  const stream = `hospital:${hospital}:dept:${department}`;
-  const group = `${stream}-consumers`;
-
-  const acked = await redis.xack(stream, group, ...message_ids);
-  ackCounter.labels(hospital, department).inc(acked);
-  return res.json({ acked });
 });
 
 // -----------------------------
 // Reclaim Pending (crash recovery)
 // GET /cg-pending/:hospital/:department?consumer_id=<id>&min_idle_ms=<ms>&count=<n>
+// 🔐 Requires JWT. consumer_id must match token's staff_id.
 // -----------------------------
 app.get('/cg-pending/:hospital/:department', async (req, res) => {
-  const { hospital, department } = req.params;
-  const { consumer_id, min_idle_ms = '30000', count = '10' } = req.query;
+  try {
+    const identity = await validateToken(req.headers.authorization);
+    const { hospital, department } = req.params;
+    const { consumer_id, min_idle_ms = '30000', count = '10' } = req.query;
 
-  if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
+    if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
 
-  const stream = `hospital:${hospital}:dept:${department}`;
-  const group = `${stream}-consumers`;
+    if (identity.hospital_id !== hospital || identity.staff_id !== consumer_id) {
+      validationFailures.inc();
+      return res.status(403).json({ error: 'Identity mismatch' });
+    }
 
-  await ensureGroup(stream, group);
+    const stream = `hospital:${hospital}:dept:${department}`;
+    const group = `${stream}-consumers`;
 
-  const [nextCursor, messages] = await redis.xautoclaim(
-    stream, group, consumer_id, min_idle_ms, '0-0', 'COUNT', count
-  );
+    await ensureGroup(stream, group);
 
-  const parsed = (messages || []).map(([id, fields]) => {
-    const obj = { id };
-    for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
-    obj.sequence = Number(obj.sequence);
-    obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
-    return obj;
-  });
+    const [nextCursor, messages] = await redis.xautoclaim(
+      stream, group, consumer_id, min_idle_ms, '0-0', 'COUNT', count
+    );
 
-  return res.json({ items: parsed, next_cursor: nextCursor });
+    const parsed = (messages || []).map(([id, fields]) => {
+      const obj = { id };
+      for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
+      obj.sequence = Number(obj.sequence);
+      obj.envelope = obj.envelope ? JSON.parse(obj.envelope) : {};
+      return obj;
+    });
+
+    return res.json({ items: parsed, next_cursor: nextCursor });
+
+  } catch {
+    validationFailures.inc();
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 // -----------------------------

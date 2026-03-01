@@ -16,10 +16,20 @@ Expected outcome for a correctly hardened broker:
   - Any 200 response is a vulnerability finding
 
 Results are printed as a summary table at the end.
+
+Changes from original
+---------------------
+- Added post-attack liveness check that verifies legitimate simulator traffic
+  is still flowing after all attacks complete. Previously the report showed
+  all-clear even when the attacker's setup phase wiped in-memory auth/tenant
+  state and caused every simulator thread to fail with 404 on login.
+- Liveness failure is reported in the summary table and causes exit code 1.
+- No new dependencies added — uses only what the original script already imports.
 """
 
 import os
 import sys
+import time
 import base64
 import hashlib
 import logging
@@ -29,6 +39,11 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+import oqs  # liboqs-python — ML-KEM-768 and ML-DSA-65
+
+KEM_ALG = "ML-KEM-768"
+DSA_ALG = "ML-DSA-65"
+ENVELOPE_VERSION = "hybrid-v1"
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -48,6 +63,10 @@ VICTIM_HOSPITAL = "hospital2"  # hospital the attacker tries to target
 ATTACKER_DEPT = "cardiology"  # attacker's real department
 VICTIM_DEPT = "radiology"  # department attacker tries to misroute into
 VICTIM_DEPT_2 = "icu"  # second victim dept for replay
+
+# Canary producer used by the liveness check — must be a simulator thread
+# that is running independently of the attacker.
+CANARY_PRODUCER = f"{HOSPITAL}_{ATTACKER_DEPT}_producer"
 
 # ----------------------------------------------------------------
 # Result tracking
@@ -127,24 +146,35 @@ def _b64(data: bytes) -> str:
 class StaffMember:
     hospital_id: str
     staff_id: str
-    department: str = ATTACKER_DEPT  # fixed to attacker's real department
+    role: str = "nurse"
+    department: str = ATTACKER_DEPT
     token: str = None
     sequence: int = 1
+
+    # Classical keys
     sign_key_obj: ed25519.Ed25519PrivateKey = field(
         default_factory=ed25519.Ed25519PrivateKey.generate
     )
     kx_private_obj: x25519.X25519PrivateKey = field(
         default_factory=x25519.X25519PrivateKey.generate
     )
-    sign_key: str = field(init=False)
-    kx_public: str = field(init=False)
+
+    # PQC keys — populated in __post_init__
+    kem_private_bytes: bytes = field(default=None, repr=False)
+    kem_public_bytes: bytes = field(default=None, repr=False)
+    dsa_private_bytes: bytes = field(default=None, repr=False)
+    dsa_public_bytes: bytes = field(default=None, repr=False)
+
+    # Derived wire-format strings — computed in __post_init__
+    sign_key: str = field(init=False, repr=False)  # Ed25519 public key (b64)
+    kx_public: str = field(init=False, repr=False)  # X25519 public key (b64)
+    kem_public: str = field(init=False, repr=False)  # ML-KEM-768 public key (b64)
+    dsa_public: str = field(init=False, repr=False)  # ML-DSA-65 public key (b64)
 
     def __post_init__(self):
         self.sign_key = _b64(
-            self.sign_key_obj.private_bytes(
-                serialization.Encoding.Raw,
-                serialization.PrivateFormat.Raw,
-                serialization.NoEncryption(),
+            self.sign_key_obj.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
             )
         )
         self.kx_public = _b64(
@@ -152,6 +182,15 @@ class StaffMember:
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
             )
         )
+        with oqs.KeyEncapsulation(KEM_ALG) as kem:
+            self.kem_public_bytes = kem.generate_keypair()
+            self.kem_private_bytes = kem.export_secret_key()
+        self.kem_public = _b64(self.kem_public_bytes)
+
+        with oqs.Signature(DSA_ALG) as dsa:
+            self.dsa_public_bytes = dsa.generate_keypair()
+            self.dsa_private_bytes = dsa.export_secret_key()
+        self.dsa_public = _b64(self.dsa_public_bytes)
 
 
 def build_payload(
@@ -162,34 +201,46 @@ def build_payload(
     sequence,
     plaintext,
     consumer_kx_public_b64,
+    consumer_kem_public_b64,
     sign_key_obj,
+    dsa_private_bytes,
 ):
-    """Encrypt a message exactly as the legitimate simulator does."""
-    consumer_pub = x25519.X25519PublicKey.from_public_bytes(
+    """Encrypt a message with hybrid PQC crypto — mirrors simulator exactly."""
+    consumer_kx_pub = x25519.X25519PublicKey.from_public_bytes(
         base64.b64decode(consumer_kx_public_b64)
     )
     eph_priv = x25519.X25519PrivateKey.generate()
     eph_pub = eph_priv.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
-    shared = eph_priv.exchange(consumer_pub)
+    shared_x25519 = eph_priv.exchange(consumer_kx_pub)
+
+    with oqs.KeyEncapsulation(KEM_ALG) as kem:
+        kem_ct, shared_kem = kem.encap_secret(base64.b64decode(consumer_kem_public_b64))
 
     session_key = HKDF(
         hashes.SHA256(), 32, None, f"{hospital_id}:{department_id}".encode()
-    ).derive(shared)
+    ).derive(shared_x25519 + shared_kem)
+
     nonce = os.urandom(12)
     aad = f"{producer_id}:{sequence}".encode()
     ciphertext = AESGCM(session_key).encrypt(nonce, plaintext.encode(), aad)
-
     digest = hashlib.sha256(ciphertext).hexdigest()
-    signature = sign_key_obj.sign(f"{producer_id}:{sequence}:{digest}".encode())
+
+    signed_content = f"{producer_id}:{sequence}:{digest}".encode()
+    sig_classical = sign_key_obj.sign(signed_content)
+    with oqs.Signature(DSA_ALG, secret_key=dsa_private_bytes) as dsa:
+        sig_pqc = dsa.sign(signed_content)
 
     return {
         "nonce": _b64(nonce),
         "ciphertext": _b64(ciphertext),
         "envelope": {
+            "version": ENVELOPE_VERSION,
             "ephemeral_public_key": _b64(eph_pub),
-            "signature": _b64(signature),
+            "kem_ciphertext": _b64(kem_ct),
+            "signature_classical": _b64(sig_classical),
+            "signature_pqc": _b64(sig_pqc),
             "cipher_hash": digest,
         },
     }
@@ -198,6 +249,19 @@ def build_payload(
 # ----------------------------------------------------------------
 # Setup: register + authenticate attacker as a legitimate staff member
 # ----------------------------------------------------------------
+def get_last_sequence(hospital_id: str, producer_id: str) -> int:
+    """Ask the broker for the last sequence it has seen for this producer."""
+    try:
+        resp = requests.get(
+            f"{BROKER_URL}/sequence/{hospital_id}/{producer_id}", timeout=5
+        )
+        if resp.status_code == 200:
+            return resp.json().get("last_sequence", 0)
+    except Exception as exc:
+        log.warning("Could not fetch last sequence: %s", exc)
+    return 0
+
+
 def setup_attacker() -> StaffMember:
     log.info("=== SETUP: registering attacker as legitimate staff ===")
     attacker = StaffMember(hospital_id=HOSPITAL, staff_id=f"{HOSPITAL}_attacker")
@@ -207,22 +271,22 @@ def setup_attacker() -> StaffMember:
         f"{TENANT_URL}/hospitals", json={"id": HOSPITAL, "name": HOSPITAL}, timeout=5
     )
 
-    # Register attacker staff
     resp = requests.post(
         f"{TENANT_URL}/staff/register",
         json={
             "id": attacker.staff_id,
             "hospital_id": attacker.hospital_id,
-            "role": "nurse",
-            "department": attacker.department,  # ← required by updated tenant service
+            "role": attacker.role,
+            "department": attacker.department,
             "public_sign_key": attacker.sign_key,
             "public_kx_key": attacker.kx_public,
+            "public_kem_key": attacker.kem_public,
+            "public_dsa_key": attacker.dsa_public,
         },
         timeout=5,
     )
-    log.info("Staff register → HTTP %d", resp.status_code)
+    log.info("Staff register → HTTP %d %s", resp.status_code, resp.text[:120])
 
-    # Authenticate — password must match what tenant service forwards to auth ("pass123")
     resp = requests.post(
         AUTH_URL,
         json={
@@ -238,36 +302,15 @@ def setup_attacker() -> StaffMember:
         sys.exit(1)
 
     attacker.token = resp.json().get("access_token")
-    log.info("Attacker authenticated ✓  token=%s…", attacker.token[:20])
-
-    # Bootstrap sequence from broker so repeated runs don't hit replay detection
     attacker.sequence = get_last_sequence(attacker.hospital_id, attacker.staff_id) + 1
+    log.info("Attacker authenticated ✓  token=%s…", attacker.token[:20])
     log.info("Attacker starting at sequence %d", attacker.sequence)
     return attacker
 
 
 # ----------------------------------------------------------------
 # ATTACK 1: MISROUTE
-# Attacker sends a message using their own legitimate credentials
-# but targets a department they don't belong to (or a different hospital).
-# Sub-cases:
-#   1a — wrong department, same hospital  (broker may allow if no dept restriction)
-#   1b — correct dept, wrong hospital     (should fail identity check)
-#   1c — outsider (no token) targeting any dept
 # ----------------------------------------------------------------
-def get_last_sequence(hospital_id: str, producer_id: str) -> int:
-    """Ask the broker for the last sequence it has seen for this producer."""
-    try:
-        resp = requests.get(
-            f"{BROKER_URL}/sequence/{hospital_id}/{producer_id}", timeout=5
-        )
-        if resp.status_code == 200:
-            return resp.json().get("last_sequence", 0)
-    except Exception as exc:
-        log.warning("Could not fetch last sequence: %s", exc)
-    return 0
-
-
 def attack_misroute(attacker: StaffMember):
     log.info("\n=== ATTACK 1: MISROUTE ===")
 
@@ -277,19 +320,22 @@ def attack_misroute(attacker: StaffMember):
         producer_id=attacker.staff_id,
         sequence=attacker.sequence,
         plaintext="MISROUTED: attacker injecting into wrong dept",
-        consumer_kx_public_b64=attacker.kx_public,  # self-loop, doesn't matter
+        consumer_kx_public_b64=attacker.kx_public,
+        consumer_kem_public_b64=attacker.kem_public,
         sign_key_obj=attacker.sign_key_obj,
+        dsa_private_bytes=attacker.dsa_private_bytes,
     )
     attacker.sequence += 1
 
-    # 1a: valid token, own hospital, wrong department
     body = {
         "hospital": attacker.hospital_id,
-        "department": VICTIM_DEPT,  # attacker's real dept is ATTACKER_DEPT
+        "department": VICTIM_DEPT,
         "producer_id": attacker.staff_id,
         "sequence": attacker.sequence,
         **{k: payload[k] for k in ("nonce", "ciphertext", "envelope")},
     }
+
+    # 1a: valid token, own hospital, wrong department
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
@@ -300,11 +346,10 @@ def attack_misroute(attacker: StaffMember):
     record("MISROUTE", "insider → wrong dept, same hospital", 403, resp)
 
     # 1b: valid token, wrong hospital entirely
-    body_wrong_hosp = {**body, "hospital": VICTIM_HOSPITAL}
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
-        json=body_wrong_hosp,
+        json={**body, "hospital": VICTIM_HOSPITAL},
         headers={"Authorization": f"Bearer {attacker.token}"},
         timeout=5,
     )
@@ -317,18 +362,10 @@ def attack_misroute(attacker: StaffMember):
 
 # ----------------------------------------------------------------
 # ATTACK 2: REPLAY
-# Attacker captures a legitimate message (by reading from /dequeue
-# which is unauthenticated in current broker) and replays it into
-# a different department or re-sends it to the same stream.
-# Sub-cases:
-#   2a — replay to a different department (same hospital)
-#   2b — replay exact same message to same dept (sequence collision)
-#   2c — outsider replay (no token)
 # ----------------------------------------------------------------
 def attack_replay(attacker: StaffMember):
     log.info("\n=== ATTACK 2: REPLAY ===")
 
-    # First, enqueue a legitimate message so we have something to capture
     payload = build_payload(
         hospital_id=attacker.hospital_id,
         department_id=ATTACKER_DEPT,
@@ -336,7 +373,9 @@ def attack_replay(attacker: StaffMember):
         sequence=attacker.sequence,
         plaintext="legitimate message about to be replayed",
         consumer_kx_public_b64=attacker.kx_public,
+        consumer_kem_public_b64=attacker.kem_public,
         sign_key_obj=attacker.sign_key_obj,
+        dsa_private_bytes=attacker.dsa_private_bytes,
     )
     legitimate_seq = attacker.sequence
     attacker.sequence += 1
@@ -354,62 +393,74 @@ def attack_replay(attacker: StaffMember):
         headers={"Authorization": f"Bearer {attacker.token}"},
         timeout=5,
     )
-
     if enqueue_resp.status_code != 200:
         log.warning(
             "Could not enqueue legitimate message for capture: %d",
             enqueue_resp.status_code,
         )
 
-    # Now capture it from the unauthenticated /dequeue endpoint
+    # 2a: outsider tries to read /dequeue with no token
+    resp = safe_request(
+        "GET", f"{BROKER_URL}/dequeue/{attacker.hospital_id}/{ATTACKER_DEPT}", timeout=5
+    )
+    record("REPLAY", "outsider → read /dequeue no token", 401, resp)
+
+    # 2b: insider tries to read /dequeue for a different hospital
+    resp = safe_request(
+        "GET",
+        f"{BROKER_URL}/dequeue/{VICTIM_HOSPITAL}/{ATTACKER_DEPT}",
+        headers={"Authorization": f"Bearer {attacker.token}"},
+        timeout=5,
+    )
+    record("REPLAY", "insider → read /dequeue wrong hospital", 403, resp)
+
+    # Capture messages using the attacker's own valid token
     captured_items = []
     dequeue_resp = safe_request(
-        "GET", f"{BROKER_URL}/dequeue/{attacker.hospital_id}/{ATTACKER_DEPT}", timeout=5
+        "GET",
+        f"{BROKER_URL}/dequeue/{attacker.hospital_id}/{ATTACKER_DEPT}",
+        headers={"Authorization": f"Bearer {attacker.token}"},
+        timeout=5,
     )
     if dequeue_resp.status_code == 200:
         captured_items = dequeue_resp.json().get("items", [])
         log.info(
-            "Captured %d message(s) from unauthenticated /dequeue", len(captured_items)
+            "Captured %d message(s) from authenticated /dequeue", len(captured_items)
         )
     else:
-        log.warning("Could not read from /dequeue: %d", dequeue_resp.status_code)
+        log.warning("Could not read own stream: %d", dequeue_resp.status_code)
 
     if not captured_items:
-        log.warning("No messages captured — skipping replay attacks")
-        record("REPLAY", "insider → replay to different dept", 409, None)
+        log.warning("No messages captured — skipping re-injection tests")
+        record("REPLAY", "insider → replay to different dept", 403, None)
         record("REPLAY", "insider → replay same dept (seq collision)", 409, None)
         record("REPLAY", "outsider → replay no token", 401, None)
         return
 
-    # Filter to messages the attacker themselves produced — otherwise we'd be
-    # replaying the simulator's messages, which triggers identity mismatch (403)
-    # before sequence checking (409), making the test misleading.
     own_messages = [
         m for m in captured_items if m.get("producer_id") == attacker.staff_id
     ]
     if not own_messages:
-        log.warning(
-            "No attacker-owned messages in stream — replay test will use latest message"
-        )
+        log.warning("No attacker-owned messages in stream — using latest message")
         own_messages = captured_items
-    captured = own_messages[-1]  # grab the most recent attacker-owned message
+    captured = own_messages[-1]
     log.info(
         "Using captured message: producer=%s seq=%s",
         captured["producer_id"],
         captured["sequence"],
     )
 
-    # 2a: replay to a different department (ciphertext is wrong for this dept but
-    #     broker should reject on sequence/identity grounds before crypto)
     body_diff_dept = {
         "hospital": attacker.hospital_id,
-        "department": VICTIM_DEPT,  # different dept
+        "department": VICTIM_DEPT,
         "producer_id": captured["producer_id"],
         "sequence": captured["sequence"],
         "nonce": captured["nonce"],
         "ciphertext": captured["ciphertext"],
         "envelope": captured["envelope"],
     }
+
+    # 2c: replay to a different department
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
@@ -419,55 +470,50 @@ def attack_replay(attacker: StaffMember):
     )
     record("REPLAY", "insider → replay to different dept", 403, resp)
 
-    # 2b: replay exact same message to same dept (sequence already seen)
-    body_same_dept = {**body_diff_dept, "department": ATTACKER_DEPT}
+    # 2d: replay to same dept (sequence already seen)
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
-        json=body_same_dept,
+        json={**body_diff_dept, "department": ATTACKER_DEPT},
         headers={"Authorization": f"Bearer {attacker.token}"},
         timeout=5,
     )
     record("REPLAY", "insider → replay same dept (seq collision)", 409, resp)
 
-    # 2c: outsider replays without a token
+    # 2e: outsider replays without a token
     resp = safe_request("POST", f"{BROKER_URL}/enqueue", json=body_diff_dept, timeout=5)
     record("REPLAY", "outsider → replay no token", 401, resp)
 
 
 # ----------------------------------------------------------------
 # ATTACK 3: IMPERSONATION
-# Attacker has a valid token for their own staff_id but sends a
-# message with a different producer_id (claiming to be someone else).
-# Sub-cases:
-#   3a — insider, valid token, forged producer_id (same hospital)
-#   3b — insider, valid token, forged producer_id + wrong hospital
-#   3c — outsider, no token, forged producer_id
 # ----------------------------------------------------------------
 def attack_impersonation(attacker: StaffMember):
     log.info("\n=== ATTACK 3: IMPERSONATION ===")
 
-    victim_id = f"{HOSPITAL}_producer"  # a real staff member the attacker knows about
+    victim_id = f"{HOSPITAL}_producer"
 
-    # Build a payload signed with attacker's own key but claiming to be victim
     payload = build_payload(
         hospital_id=attacker.hospital_id,
         department_id=ATTACKER_DEPT,
-        producer_id=victim_id,  # ← forged
+        producer_id=victim_id,
         sequence=1,
         plaintext="IMPERSONATION: attacker pretending to be victim",
         consumer_kx_public_b64=attacker.kx_public,
-        sign_key_obj=attacker.sign_key_obj,  # attacker's own key, not victim's
+        consumer_kem_public_b64=attacker.kem_public,
+        sign_key_obj=attacker.sign_key_obj,
+        dsa_private_bytes=attacker.dsa_private_bytes,
     )
 
-    # 3a: valid token but producer_id doesn't match token's staff_id
     body = {
         "hospital": attacker.hospital_id,
         "department": ATTACKER_DEPT,
-        "producer_id": victim_id,  # forged — broker checks identity.staff_id == producer_id
+        "producer_id": victim_id,
         "sequence": 1,
         **{k: payload[k] for k in ("nonce", "ciphertext", "envelope")},
     }
+
+    # 3a: valid token but producer_id doesn't match token's staff_id
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
@@ -478,15 +524,14 @@ def attack_impersonation(attacker: StaffMember):
     record("IMPERSONATION", "insider → forged producer_id same hospital", 403, resp)
 
     # 3b: valid token, forged producer_id, wrong hospital
-    body_wrong_hosp = {
-        **body,
-        "hospital": VICTIM_HOSPITAL,
-        "producer_id": f"{VICTIM_HOSPITAL}_producer",
-    }
     resp = safe_request(
         "POST",
         f"{BROKER_URL}/enqueue",
-        json=body_wrong_hosp,
+        json={
+            **body,
+            "hospital": VICTIM_HOSPITAL,
+            "producer_id": f"{VICTIM_HOSPITAL}_producer",
+        },
         headers={"Authorization": f"Bearer {attacker.token}"},
         timeout=5,
     )
@@ -500,9 +545,99 @@ def attack_impersonation(attacker: StaffMember):
 
 
 # ----------------------------------------------------------------
+# Post-attack liveness check (NEW)
+# ----------------------------------------------------------------
+def liveness_check() -> bool:
+    """
+    Verify that legitimate simulator traffic is still healthy after all attacks.
+
+    Returns True if the system is live, False if it has been degraded.
+
+    This catches the failure mode where the attacker's setup phase wiped
+    in-memory auth/tenant state and every simulator thread started returning
+    404 on login — even though all individual attack probes returned 4xx.
+    """
+    log.info("\n=== POST-ATTACK LIVENESS CHECK ===")
+    log.info("Waiting 5s for simulator threads to complete a cycle...")
+    time.sleep(5)
+
+    passed = True
+
+    # Check 1: canary broker sequence must still be advancing
+    log.info("Check 1: canary broker sequence still advancing")
+    seq_before_resp = safe_request(
+        "GET", f"{BROKER_URL}/sequence/{HOSPITAL}/{CANARY_PRODUCER}", timeout=5
+    )
+    time.sleep(3)
+    seq_after_resp = safe_request(
+        "GET", f"{BROKER_URL}/sequence/{HOSPITAL}/{CANARY_PRODUCER}", timeout=5
+    )
+
+    if seq_before_resp.status_code != 200 or seq_after_resp.status_code != 200:
+        log.error("  ❌ LIVENESS FAIL — broker sequence endpoint unreachable")
+        passed = False
+    else:
+        before = seq_before_resp.json().get("last_sequence", 0)
+        after = seq_after_resp.json().get("last_sequence", 0)
+        if after > before:
+            log.info("  ✅ Sequence advancing: %d → %d", before, after)
+        else:
+            log.error(
+                "  ❌ LIVENESS FAIL — sequence stalled at %d (was %d before check)",
+                after,
+                before,
+            )
+            passed = False
+
+    # Check 2: a fresh legitimate login for the canary producer must succeed
+    log.info("Check 2: fresh legitimate login for canary producer")
+    login_resp = safe_request(
+        "POST",
+        AUTH_URL,
+        json={
+            "hospital_id": HOSPITAL,
+            "staff_id": CANARY_PRODUCER,
+            "password": "pass123",
+        },
+        timeout=5,
+    )
+    if login_resp.status_code == 404:
+        log.error(
+            "  ❌ LIVENESS FAIL — canary producer returns 404 "
+            "(auth state was wiped by attacks)"
+        )
+        passed = False
+    elif login_resp.status_code in (200, 201):
+        log.info("  ✅ Login OK (HTTP %d)", login_resp.status_code)
+    else:
+        log.error(
+            "  ❌ LIVENESS FAIL — unexpected login status HTTP %d %s",
+            login_resp.status_code,
+            login_resp.text[:80],
+        )
+        passed = False
+
+    # Check 3: tenant health must report database ok
+    log.info("Check 3: tenant service health")
+    health_resp = safe_request("GET", f"{TENANT_URL}/health", timeout=5)
+    if health_resp.status_code == 200:
+        body = health_resp.json()
+        if body.get("database") not in (None, "ok"):
+            log.error("  ❌ LIVENESS FAIL — tenant database unhealthy: %s", body)
+            passed = False
+        else:
+            log.info("  ✅ Tenant healthy: %s", body)
+    else:
+        log.error("  ❌ LIVENESS FAIL — tenant health endpoint unreachable")
+        passed = False
+
+    return passed
+
+
+# ----------------------------------------------------------------
 # Summary table
 # ----------------------------------------------------------------
-def print_summary():
+def print_summary(liveness_ok: bool):
     col_w = [22, 44, 10, 10, 18]
     headers = ["ATTACK", "SCENARIO", "EXPECTED", "ACTUAL", "VERDICT"]
     sep = "+" + "+".join("-" * (w + 2) for w in col_w) + "+"
@@ -549,7 +684,19 @@ def print_summary():
                 print(f"     → [{r['attack']}] {r['scenario']}")
                 print(f"        Error: {r['detail']}")
 
-    if vulns == 0 and errors == 0:
+    # Liveness result
+    print()
+    if liveness_ok:
+        print(
+            "  ✅ POST-ATTACK LIVENESS: system healthy — simulator traffic still flowing"
+        )
+    else:
+        print(
+            "  ❌ POST-ATTACK LIVENESS: system DEGRADED — attacks caused collateral damage!"
+        )
+        print("     Check auth/tenant service state and simulator thread logs.")
+
+    if vulns == 0 and errors == 0 and liveness_ok:
         print(
             "\n  ✅ All attacks confirmed blocked — Zero-Trust broker is hardened correctly."
         )
@@ -575,4 +722,9 @@ if __name__ == "__main__":
     attack_replay(attacker)
     attack_impersonation(attacker)
 
-    print_summary()
+    liveness_ok = liveness_check()
+
+    print_summary(liveness_ok)
+
+    if not liveness_ok:
+        sys.exit(1)

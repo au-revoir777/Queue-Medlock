@@ -11,17 +11,19 @@ app = FastAPI(title="MedLock KMS Service - Zero Trust Mode")
 # Structure:
 # {(hospital_id, department_id): [
 #     {
-#         "staff_id": str,
-#         "public_sign_key": str,
-#         "public_kx_key": str,
-#         "timestamp": float
+#         "staff_id":        str,
+#         "public_sign_key": str,   # Ed25519   — classical signature verification
+#         "public_kx_key":   str,   # X25519    — classical key exchange
+#         "public_kem_key":  str,   # ML-KEM-768 — post-quantum key encapsulation
+#         "public_dsa_key":  str,   # ML-DSA-65  — post-quantum signature verification
+#         "timestamp":       float
 #     }
 # ]}
 # -----------------------------
 
 key_registry: dict[tuple[str, str], list[dict]] = {}
 
-REPLAY_WINDOW_SECONDS = 5  # replay detection window
+REPLAY_WINDOW_SECONDS = 5
 
 # -----------------------------
 # Prometheus Metrics
@@ -62,8 +64,7 @@ registered_staff_gauge = Gauge(
 @app.middleware("http")
 async def count_requests(request, call_next):
     requests_total.inc()
-    response = await call_next(request)
-    return response
+    return await call_next(request)
 
 
 @app.get("/metrics")
@@ -80,8 +81,10 @@ class KeyExchangePayload(BaseModel):
     hospital_id: str
     department_id: str
     staff_id: str
-    public_sign_key: str
-    public_kx_key: str
+    public_sign_key: str  # Ed25519 public key (classical)
+    public_kx_key: str  # X25519 public key (classical)
+    public_kem_key: str  # ML-KEM-768 public key (post-quantum)
+    public_dsa_key: str  # ML-DSA-65 public key (post-quantum)
 
 
 # -----------------------------
@@ -91,7 +94,11 @@ class KeyExchangePayload(BaseModel):
 
 @app.get("/keys/{hospital_id}/{department_id}")
 def get_keys(hospital_id: str, department_id: str):
-
+    """
+    Return all registered public keys for a hospital/department scope.
+    Consumers call this to fetch a producer's public keys before decrypting.
+    Returns all four keys per staff member (Ed25519, X25519, ML-KEM-768, ML-DSA-65).
+    """
     scope = (hospital_id, department_id)
 
     keys_fetched_total.labels(
@@ -106,9 +113,34 @@ def get_keys(hospital_id: str, department_id: str):
     }
 
 
+@app.get("/keys/{hospital_id}/{department_id}/{staff_id}")
+def get_staff_keys(hospital_id: str, department_id: str, staff_id: str):
+    """
+    Return the public keys for a specific staff member.
+    More efficient than fetching all keys when the producer_id is known.
+    """
+    scope = (hospital_id, department_id)
+    entry = next(
+        (k for k in key_registry.get(scope, []) if k["staff_id"] == staff_id),
+        None,
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Staff keys not found")
+
+    keys_fetched_total.labels(
+        hospital_id=hospital_id, department_id=department_id
+    ).inc()
+
+    return entry
+
+
 @app.post("/exchange")
 def exchange(payload: KeyExchangePayload):
-
+    """
+    Register or update a staff member's public keys.
+    Called by the tenant service on staff registration.
+    Stores all four public keys: Ed25519, X25519, ML-KEM-768, ML-DSA-65.
+    """
     now = time.time()
     scope = (payload.hospital_id, payload.department_id)
 
@@ -125,7 +157,6 @@ def exchange(payload: KeyExchangePayload):
             replay_attempts_total.inc()
 
         key_overwrites_total.inc()
-
         key_registry[scope] = [
             k for k in key_registry[scope] if k["staff_id"] != payload.staff_id
         ]
@@ -133,8 +164,10 @@ def exchange(payload: KeyExchangePayload):
     key_registry[scope].append(
         {
             "staff_id": payload.staff_id,
-            "public_sign_key": payload.public_sign_key,
-            "public_kx_key": payload.public_kx_key,
+            "public_sign_key": payload.public_sign_key,  # Ed25519
+            "public_kx_key": payload.public_kx_key,  # X25519
+            "public_kem_key": payload.public_kem_key,  # ML-KEM-768
+            "public_dsa_key": payload.public_dsa_key,  # ML-DSA-65
             "timestamp": now,
         }
     )
