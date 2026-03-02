@@ -111,6 +111,53 @@ services:
         condition: service_healthy
 
   # --------------------------------------------------
+  # CLINICAL SERVICE
+  # --------------------------------------------------
+  clinical-service:
+    build: ./control-plane/clinical-service
+    container_name: medlock_clinical
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AUTH_VALIDATE_URL: http://auth-service:8000/validate
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - medlock-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+
+  # --------------------------------------------------
+  # SEED (runs once on startup, then exits)
+  # --------------------------------------------------
+  seed:
+    build: ./scripts/seed
+    container_name: medlock_seed
+    environment:
+      TENANT_URL: http://tenant-service:8000
+      AUTH_URL: http://auth-service:8000
+      KMS_URL: http://kms-service:8000
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo1234}
+    networks:
+      - medlock-net
+    restart: "no"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      tenant-service:
+        condition: service_healthy
+      kms-service:
+        condition: service_healthy
+
+  # --------------------------------------------------
   # BROKER
   # --------------------------------------------------
   broker:
@@ -172,6 +219,8 @@ services:
         condition: service_healthy
       broker:
         condition: service_healthy
+      clinical-service:
+        condition: service_healthy
 
   # --------------------------------------------------
   # PROMETHEUS
@@ -218,6 +267,7 @@ services:
       KMS_URL: http://kms-service:8000
       BROKER_URL: http://broker:9000
       SIM_PASSWORD: ${SIM_PASSWORD}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     networks:
       - medlock-net
     restart: unless-stopped
@@ -229,6 +279,8 @@ services:
       kms-service:
         condition: service_healthy
       broker:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   attacker:
@@ -250,7 +302,7 @@ services:
       tenant-service:
         condition: service_healthy
     networks:
-      - medlock-net        # ← was your_network_name
+      - medlock-net
     profiles:
       - attack
 

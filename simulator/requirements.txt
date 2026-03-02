@@ -3,3 +3,4 @@ cryptography
 prometheus-client
 aiohttp
 liboqs-python
+psycopg2-binary

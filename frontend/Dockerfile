@@ -1,6 +1,14 @@
-FROM node:20-alpine
+FROM node:20-slim AS builder
+
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY package.json ./
 RUN npm install
 COPY . .
-CMD ["npm", "run", "start"]
+RUN npm run build
+
+FROM node:20-slim
+WORKDIR /app
+RUN npm install -g serve
+COPY --from=builder /app/dist ./dist
+EXPOSE 3000
+CMD ["serve", "-s", "dist", "-l", "3000"]

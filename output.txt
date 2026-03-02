@@ -20,6 +20,7 @@
 │   ├── test_full_flow.cpython-311-pytest-9.0.2.pyc
 │   ├── test_producer.cpython-311-pytest-9.0.2.pyc
 │   └── test_simulator.cpython-311-pytest-9.0.2.pyc
+├── attacker.py
 ├── broker
 │   ├── Dockerfile
 │   ├── eslint.config.mjs
@@ -46,6 +47,11 @@
 │   │   ├── app
 │   │   │   └── main.py
 │   │   └── requirements.txt
+│   ├── clinical-service
+│   │   ├── Dockerfile
+│   │   ├── app
+│   │   │   └── main.py
+│   │   └── requirements.txt
 │   ├── kms-service
 │   │   ├── Dockerfile
 │   │   ├── app
@@ -58,14 +64,37 @@
 │       └── requirements.txt
 ├── docker-compose.yml
 ├── frontend
+│   ├── .env
 │   ├── Dockerfile
 │   ├── index.html
+│   ├── package-lock.json
 │   ├── package.json
 │   ├── src
+│   │   ├── App.tsx
+│   │   ├── api.ts
+│   │   ├── components
+│   │   │   ├── Layout.tsx
+│   │   │   ├── PageHeader.tsx
+│   │   │   └── RecordFeed.tsx
+│   │   ├── context
+│   │   │   └── AuthContext.tsx
+│   │   ├── hooks
+│   │   │   └── useWebSocket.ts
+│   │   ├── index.css
 │   │   ├── main.tsx
 │   │   └── pages
-│   │       └── App.tsx
-│   └── tsconfig.json
+│   │       ├── Admin.tsx
+│   │       ├── App.tsx
+│   │       ├── Cardiology.tsx
+│   │       ├── Dashboard.tsx
+│   │       ├── DeptPages.tsx
+│   │       ├── ICU.tsx
+│   │       ├── Login.tsx
+│   │       ├── Neurology.tsx
+│   │       ├── Oncology.tsx
+│   │       └── Radiology.tsx
+│   ├── tsconfig.json
+│   └── vite.config.js
 ├── infra
 │   ├── nginx
 │   │   └── default.conf
@@ -88,7 +117,11 @@
 │   │   └── crypto.py
 │   └── requirements.txt
 ├── scripts
-│   └── gen_keys.py
+│   ├── gen_keys.py
+│   └── seed
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       └── seed.py
 ├── send_receive_live.py
 ├── send_receive_live_multi.py
 ├── send_receive_live_stress.py
@@ -103,7 +136,6 @@
 ├── test_consumer.py
 ├── test_full_flow.py
 ├── test_producer.py
-├── test_simulator.py
-└── attacker.py
+└── test_simulator.py
 
-304 directories, 1683 files
+1212 directories, 10664 files
