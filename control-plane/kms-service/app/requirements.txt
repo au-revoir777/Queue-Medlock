@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+pydantic
+prometheus-client
+psycopg2-binary

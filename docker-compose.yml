@@ -119,6 +119,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       AUTH_VALIDATE_URL: http://auth-service:8000/validate
+      BROKER_URL: http://broker:9000
+      KMS_URL: http://kms-service:8000
+      TENANT_URL: http://tenant-service:8000
     ports:
       - "8003:8000"
     healthcheck:
@@ -166,6 +169,9 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       AUTH_VALIDATE_URL: http://auth-service:8000/validate
+      BROKER_URL: http://broker:9000
+      KMS_URL: http://kms-service:8000
+      TENANT_URL: http://tenant-service:8000
     ports:
       - "9000:9000"
     healthcheck:
@@ -247,6 +253,13 @@ services:
     container_name: medlock_grafana
     ports:
       - "3100:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: medlock
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - medlock-net
     restart: unless-stopped

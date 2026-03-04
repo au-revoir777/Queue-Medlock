@@ -264,7 +264,7 @@ export function Oncology() {
 // ----------------------------------------------------------------
 function AdminCard({ record }: { record: ClinicalRecord }) {
   const deptColors: Record<string, string> = {
-    icu: 'var(--accent-red)', cardiology: 'var(--accent-cyan)',
+    icu: '#ec0e2f', cardiology: '#3d0cce',
     radiology: '#a78bfa', neurology: '#fb923c', oncology: '#34d399',
   }
   const color = deptColors[record.department] || 'var(--text-muted)'

@@ -1,17 +1,17 @@
 import { createContext, useContext, useState, ReactNode } from 'react'
 
-interface Identity {
+export interface Identity {
   hospital_id: string
-  staff_id: string
-  department: string
-  role?: string
+  staff_id:    string
+  department:  string
+  role:        string
 }
 
 interface AuthContextType {
-  token: string | null
+  token:    string | null
   identity: Identity | null
-  login: (token: string, identity: Identity) => void
-  logout: () => void
+  login:    (token: string, identity: Identity) => void
+  logout:   () => void
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)

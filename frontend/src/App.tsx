@@ -1,14 +1,16 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './context/AuthContext.tsx'
-import Login from './pages/Login.tsx'
-import Dashboard from './pages/Dashboard.tsx'
-import ICU from './pages/ICU.tsx'
-import Cardiology from './pages/Cardiology.tsx'
-import Radiology from './pages/Radiology.tsx'
-import Neurology from './pages/Neurology.tsx'
-import Oncology from './pages/Oncology.tsx'
-import Admin from './pages/Admin.tsx'
-import Layout from './components/Layout.tsx'
+import { AuthProvider, useAuth } from './context/AuthContext'
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
+import ICU from './pages/ICU'
+import Cardiology from './pages/Cardiology'
+import Radiology from './pages/Radiology'
+import Neurology from './pages/Neurology'
+import Oncology from './pages/Oncology'
+import Admin from './pages/Admin'
+import Compose from './pages/Compose.tsx'
+import AuditLog from './pages/AuditLog.tsx'
+import Layout from './components/Layout'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth()
@@ -34,6 +36,8 @@ export default function App() {
             <Route path="neurology" element={<Neurology />} />
             <Route path="oncology" element={<Oncology />} />
             <Route path="admin" element={<Admin />} />
+            <Route path="compose" element={<Compose />} />
+            <Route path="audit" element={<AuditLog />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

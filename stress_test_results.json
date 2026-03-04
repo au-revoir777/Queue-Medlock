@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-03-04T06:34:54Z",
+  "duration_s": 30,
+  "results": [
+    {
+      "name": "login",
+      "total": 4257,
+      "success": 4257,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 60.8,
+      "p95": 141.4,
+      "p99": 211.4,
+      "mean": 70.5,
+      "max": 380.8,
+      "rps": 141.9
+    },
+    {
+      "name": "validate",
+      "total": 6768,
+      "success": 6768,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 56.3,
+      "p95": 138.7,
+      "p99": 200.3,
+      "mean": 66.6,
+      "max": 414.2,
+      "rps": 225.6
+    },
+    {
+      "name": "records_dept",
+      "total": 2376,
+      "success": 2376,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 105.3,
+      "p95": 283.0,
+      "p99": 455.9,
+      "mean": 126.5,
+      "max": 749.8,
+      "rps": 79.2
+    },
+    {
+      "name": "records_hospital",
+      "total": 1251,
+      "success": 1251,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 104.7,
+      "p95": 246.0,
+      "p99": 336.7,
+      "mean": 120.4,
+      "max": 434.2,
+      "rps": 41.7
+    },
+    {
+      "name": "send_permitted",
+      "total": 2290,
+      "success": 2290,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 56.4,
+      "p95": 135.0,
+      "p99": 209.0,
+      "mean": 65.5,
+      "max": 346.9,
+      "rps": 76.3
+    },
+    {
+      "name": "send_blocked",
+      "total": 5117,
+      "success": 5117,
+      "errors": 0,
+      "error_pct": 0.0,
+      "p50": 25.1,
+      "p95": 60.0,
+      "p99": 84.5,
+      "mean": 29.3,
+      "max": 149.4,
+      "rps": 170.6
+    }
+  ]
+}
