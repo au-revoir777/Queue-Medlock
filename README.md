@@ -6,6 +6,7 @@ MedLock is a secure, multi-tenant clinical messaging platform built on a **Zero 
 
 ## Table of Contents
 
+- [UI](#ui)
 - [Architecture Overview](#architecture-overview)
 - [Project Structure](#project-structure)
 - [Services](#services)
@@ -18,6 +19,18 @@ MedLock is a secure, multi-tenant clinical messaging platform built on a **Zero 
 - [Developer Tooling](#developer-tooling)
 - [Testing & Simulation](#testing--simulation)
 - [Key Design Decisions](#key-design-decisions)
+
+---
+
+## UI
+
+![](assets/Screenshot%202026-03-05%20204633.png)
+![](assets/Screenshot%202026-03-05%20204705.png)
+![](assets/Screenshot%202026-03-05%20204720.png)
+![](assets/Screenshot%202026-03-05%20204750.png)
+![](assets/Screenshot%202026-03-05%20204806.png)
+![](assets/Screenshot%202026-03-05%20204822.png)
+![](assets/Screenshot%202026-03-05%20204837.png)
 
 ---
 
@@ -178,6 +191,7 @@ Browser  →  WebSocket  →  Clinical Service  (token in query param)
 │   ├── gen_keys.py                 # Key pair generation utility
 │   └── seed/
 │       └── seed.py                 # Demo hospital/staff/patient seed script
+├── assets/                         # README screenshots
 ├── infra/
 │   ├── schema.sql                  # Shared Postgres schema (run at DB init)
 │   ├── certs/
