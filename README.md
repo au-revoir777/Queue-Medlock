@@ -25,11 +25,17 @@ MedLock is a secure, multi-tenant clinical messaging platform built on a **Zero 
 ## UI
 
 ![](assets/Screenshot%202026-03-05%20204633.png)
+
 ![](assets/Screenshot%202026-03-05%20204705.png)
+
 ![](assets/Screenshot%202026-03-05%20204720.png)
+
 ![](assets/Screenshot%202026-03-05%20204750.png)
+
 ![](assets/Screenshot%202026-03-05%20204806.png)
+
 ![](assets/Screenshot%202026-03-05%20204822.png)
+
 ![](assets/Screenshot%202026-03-05%20204837.png)
 
 ---
