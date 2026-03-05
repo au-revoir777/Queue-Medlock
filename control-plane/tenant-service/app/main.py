@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 from prometheus_client import Counter, Gauge, generate_latest
 import time
-import requests
+import mtls_requests as requests  # replaces: import requests
 import os
 import psycopg2
 import psycopg2.extras

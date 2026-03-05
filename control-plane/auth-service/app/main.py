@@ -52,6 +52,7 @@ from prometheus_client import Counter, generate_latest
 from contextlib import contextmanager
 import hashlib, time, os, threading, asyncio
 import psycopg2, psycopg2.extras, psycopg2.pool
+import mtls_requests as requests  # replaces: import requests
 
 app = FastAPI(title="MedLock Auth Service")
 app.add_middleware(

@@ -1,10 +1,6 @@
 FROM python:3.11-slim
-
 WORKDIR /app
-
-COPY requirements.txt .
+COPY scripts/seed/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-COPY seed.py .
-
+COPY scripts/seed/seed.py .
 CMD ["python", "seed.py"]

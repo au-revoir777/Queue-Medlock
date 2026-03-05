@@ -30,9 +30,13 @@ import sys
 import time
 import base64
 import logging
+import urllib3
 import requests
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives import serialization
+
+# Suppress SSL warnings for self-signed certs
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,10 +44,36 @@ logging.basicConfig(
 )
 log = logging.getLogger("seed")
 
-TENANT_URL = os.environ.get("TENANT_URL", "http://tenant-service:8000")
-AUTH_URL = os.environ.get("AUTH_URL", "http://auth-service:8000")
-KMS_URL = os.environ.get("KMS_URL", "http://kms-service:8000")
+TENANT_URL = os.environ.get("TENANT_URL", "https://tenant-service:8000")
+AUTH_URL = os.environ.get("AUTH_URL", "https://auth-service:8000")
+KMS_URL = os.environ.get("KMS_URL", "https://kms-service:8000")
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "demo1234")
+
+# mTLS cert paths from environment
+MTLS_CERT_PATH = os.environ.get("MTLS_CERT_PATH")
+MTLS_KEY_PATH = os.environ.get("MTLS_KEY_PATH")
+MTLS_CA_PATH = os.environ.get("MTLS_CA_PATH")
+
+
+def build_session() -> requests.Session:
+    """Build a requests Session with mTLS client cert and CA verification."""
+    session = requests.Session()
+    if MTLS_CERT_PATH and MTLS_KEY_PATH:
+        session.cert = (MTLS_CERT_PATH, MTLS_KEY_PATH)
+        log.info("mTLS enabled — cert=%s", MTLS_CERT_PATH)
+    else:
+        log.warning("No mTLS cert configured — requests will be unauthenticated")
+
+    if MTLS_CA_PATH:
+        session.verify = MTLS_CA_PATH
+        log.info("Using CA bundle: %s", MTLS_CA_PATH)
+    else:
+        # Fall back to disabling verification (dev only)
+        session.verify = False
+        log.warning("No CA path set — SSL verification disabled")
+
+    return session
+
 
 # Try to import oqs for post-quantum keys — fall back to classical-only if unavailable
 try:
@@ -172,10 +202,16 @@ def generate_keys() -> dict:
     }
 
 
-def wait_for_service(url: str, name: str, retries: int = 20, delay: float = 3.0):
+def wait_for_service(
+    session: requests.Session,
+    url: str,
+    name: str,
+    retries: int = 20,
+    delay: float = 3.0,
+):
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(f"{url}/health", timeout=3)
+            resp = session.get(f"{url}/health", timeout=3)
             if resp.status_code == 200:
                 log.info("%s is ready (attempt %d)", name, attempt)
                 return
@@ -186,9 +222,9 @@ def wait_for_service(url: str, name: str, retries: int = 20, delay: float = 3.0)
     sys.exit(1)
 
 
-def create_hospital(hospital: dict) -> bool:
+def create_hospital(session: requests.Session, hospital: dict) -> bool:
     try:
-        resp = requests.post(
+        resp = session.post(
             f"{TENANT_URL}/hospitals",
             json={"id": hospital["id"], "name": hospital["name"]},
             timeout=5,
@@ -211,7 +247,7 @@ def create_hospital(hospital: dict) -> bool:
         return False
 
 
-def register_staff(member: dict) -> bool:
+def register_staff(session: requests.Session, member: dict) -> bool:
     keys = generate_keys()
     payload = {
         "id": member["id"],
@@ -221,7 +257,7 @@ def register_staff(member: dict) -> bool:
         **keys,
     }
     try:
-        resp = requests.post(
+        resp = session.post(
             f"{TENANT_URL}/staff/register",
             json=payload,
             timeout=5,
@@ -249,7 +285,7 @@ def register_staff(member: dict) -> bool:
         return False
 
 
-def update_password(member: dict) -> bool:
+def update_password(session: requests.Session, member: dict) -> bool:
     """
     The tenant-service registers staff with password 'pass123' internally.
     We need to update the auth record to use DEMO_PASSWORD instead.
@@ -257,7 +293,7 @@ def update_password(member: dict) -> bool:
     already exists with the correct password so we skip silently.
     """
     try:
-        resp = requests.post(
+        resp = session.post(
             f"{AUTH_URL}/register",
             json={
                 "hospital_id": member["hospital_id"],
@@ -283,8 +319,10 @@ def update_password(member: dict) -> bool:
 if __name__ == "__main__":
     log.info("MedLock demo seed starting...")
 
-    wait_for_service(TENANT_URL, "tenant-service")
-    wait_for_service(AUTH_URL, "auth-service")
+    session = build_session()
+
+    wait_for_service(session, TENANT_URL, "tenant-service")
+    wait_for_service(session, AUTH_URL, "auth-service")
 
     # Give services a moment to fully settle after health check passes
     time.sleep(2)
@@ -292,12 +330,12 @@ if __name__ == "__main__":
     # Create hospitals
     log.info("--- Creating hospitals ---")
     for hospital in HOSPITALS:
-        create_hospital(hospital)
+        create_hospital(session, hospital)
 
     # Register staff
     log.info("--- Registering demo staff ---")
     for member in STAFF:
-        register_staff(member)
+        register_staff(session, member)
 
     # Update passwords to demo1234
     # tenant-service registers staff with 'pass123' internally;
@@ -305,7 +343,7 @@ if __name__ == "__main__":
     # already has the right password from a previous seed run.
     log.info("--- Setting demo passwords ---")
     for member in STAFF:
-        update_password(member)
+        update_password(session, member)
 
     log.info("Seed complete. Demo accounts ready:")
     log.info("  Password for all accounts: %s", DEMO_PASSWORD)

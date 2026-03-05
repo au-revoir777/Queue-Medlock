@@ -1,10 +1,5 @@
-# ─────────────────────────────────────────────
-# Stage 1 — Build liboqs
-# ─────────────────────────────────────────────
 FROM python:3.12-slim AS builder
-
 WORKDIR /build
-
 RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
@@ -13,8 +8,6 @@ RUN apt-get update && apt-get install -y \
     git \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Clone and build liboqs (pinned for cache stability)
 RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git \
     && cmake -S liboqs -B liboqs/build \
         -GNinja \
@@ -24,25 +17,19 @@ RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git \
     && ninja -C liboqs/build \
     && ninja -C liboqs/build install
 
-
-# ─────────────────────────────────────────────
-# Stage 2 — Runtime Image
-# ─────────────────────────────────────────────
 FROM python:3.12-slim
-
-ENV PYTHONUNBUFFERED=1
 WORKDIR /app
-
-# Copy compiled liboqs from builder
+ENV PYTHONPATH=/app/mtls
 COPY --from=builder /usr/local /usr/local
-
 RUN ldconfig
-
-# Install Python dependencies separately for caching
-COPY requirements.txt .
+COPY control-plane/kms-service/requirements.txt .
 RUN OQS_BUILD=skip pip install --no-cache-dir -r requirements.txt
-
-# Copy only application code (last for fast rebuilds)
-COPY app ./app
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY control-plane/kms-service/app ./app
+COPY mtls/mtls_requests.py ./mtls/mtls_requests.py
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--ssl-keyfile", "/certs/kms-service.key", \
+     "--ssl-certfile", "/certs/kms-service.crt", \
+     "--ssl-ca-certs", "/certs/ca.crt", \
+     "--ssl-cert-reqs", "2"]

@@ -26,6 +26,7 @@ import os
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
+import mtls_requests as requests  # replaces: import requests
 
 app = FastAPI(title="MedLock KMS Service - Zero Trust Mode")
 

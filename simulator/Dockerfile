@@ -1,6 +1,3 @@
-# ─────────────────────────────────────────────
-# Stage 1 — Build liboqs
-# ─────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -36,9 +33,10 @@ COPY --from=builder /usr/local /usr/local
 
 RUN ldconfig
 
-COPY requirements.txt .
+COPY simulator/requirements.txt .
 RUN OQS_BUILD=skip pip install --no-cache-dir -r requirements.txt
 
-COPY simulator.py .
+COPY simulator/simulator.py .
+COPY mtls/mtls_requests.py .
 
 CMD ["python", "simulator.py"]

@@ -38,7 +38,7 @@ from contextlib import contextmanager
 import os, time, asyncio, json, hashlib, threading
 import psycopg2, psycopg2.extras, psycopg2.pool
 from datetime import datetime
-import requests as http_requests
+import mtls_requests as requests  # replaces: import requests
 
 app = FastAPI(title="MedLock Clinical API Service")
 
@@ -262,7 +262,7 @@ def _call_validate(token: str) -> dict:
 
     token_cache_misses.inc()
     try:
-        resp = http_requests.post(AUTH_VALIDATE_URL, json={"token": token}, timeout=3)
+        resp = requests.post(AUTH_VALIDATE_URL, json={"token": token}, timeout=3)
         if resp.status_code != 200:
             auth_failures_total.inc()
             raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -579,7 +579,7 @@ def send_message(body: SendMessageRequest, request: Request):
     else:
         kms_cache_misses.inc()
         try:
-            kms_resp = http_requests.get(
+            kms_resp = requests.get(
                 f"{KMS_URL}/keys/{hospital}/{dept}/{staff_id}", timeout=3
             )
             if kms_resp.status_code != 200:
@@ -669,7 +669,7 @@ def send_message(body: SendMessageRequest, request: Request):
 
 def _get_next_sequence(hospital_id: str, producer_id: str) -> int:
     try:
-        resp = http_requests.get(
+        resp = requests.get(
             f"{BROKER_URL}/sequence/{hospital_id}/{producer_id}", timeout=3
         )
         if resp.status_code == 200:

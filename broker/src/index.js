@@ -1,13 +1,15 @@
 const express = require('express');
-const Redis = require('ioredis');
-const client = require('prom-client');
-const axios = require('axios');
+const https   = require('https');
+const fs      = require('fs');
+const Redis   = require('ioredis');
+const client  = require('prom-client');
+const mtls    = require('./mtlsClient');
 
 const app = express();
 app.use(express.json());
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-const AUTH_VALIDATE_URL = process.env.AUTH_VALIDATE_URL || 'http://localhost:8001/validate';
+const AUTH_VALIDATE_URL = process.env.AUTH_VALIDATE_URL || 'https://localhost:8001/validate';
 
 // -----------------------------
 // Prometheus Metrics
@@ -50,7 +52,7 @@ async function validateToken(authHeader) {
     throw new Error('Missing token');
   }
   const token = authHeader.split(' ')[1];
-  const response = await axios.post(AUTH_VALIDATE_URL, { token });
+  const response = await mtls.post(AUTH_VALIDATE_URL, { token });
   return response.data;
 }
 
@@ -67,11 +69,8 @@ async function ensureGroup(stream, group) {
 
 // -----------------------------
 // Sequence Bootstrap
-//
 // GET /sequence/:hospital/:producer_id
-//
-// Unauthenticated intentionally — sequence numbers are not secret,
-// they are monotonic counters used only for replay protection.
+// Unauthenticated intentionally — sequence numbers are not secret.
 // -----------------------------
 app.get('/sequence/:hospital/:producer_id', async (req, res) => {
   const { hospital, producer_id } = req.params;
@@ -94,7 +93,6 @@ app.post('/enqueue', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // 🔐 Enforce identity match: hospital + staff_id + department
     if (
       identity.hospital_id !== hospital   ||
       identity.staff_id    !== producer_id ||
@@ -106,7 +104,6 @@ app.post('/enqueue', async (req, res) => {
 
     const stream = `hospital:${hospital}:dept:${department}`;
 
-    // 🔁 Replay protection (sequence check)
     const lastSeqKey = `seq:${hospital}:${producer_id}`;
     const lastSeq = await redis.get(lastSeqKey);
 
@@ -136,15 +133,13 @@ app.post('/enqueue', async (req, res) => {
 });
 
 // -----------------------------
-// Dequeue (legacy — full stream scan, no ACK)
-// 🔐 Now requires a valid JWT. Consumer may only read from their own hospital.
+// Dequeue (legacy)
 // -----------------------------
 app.get('/dequeue/:hospital/:department', async (req, res) => {
   try {
     const identity = await validateToken(req.headers.authorization);
     const { hospital, department } = req.params;
 
-    // Consumer must belong to the same hospital they are reading from
     if (identity.hospital_id !== hospital) {
       validationFailures.inc();
       return res.status(403).json({ error: 'Identity mismatch' });
@@ -172,8 +167,6 @@ app.get('/dequeue/:hospital/:department', async (req, res) => {
 
 // -----------------------------
 // Consumer Group Dequeue
-// GET /cg-dequeue/:hospital/:department?consumer_id=<id>&count=<n>
-// 🔐 Requires JWT. consumer_id must match token's staff_id.
 // -----------------------------
 app.get('/cg-dequeue/:hospital/:department', async (req, res) => {
   try {
@@ -183,8 +176,6 @@ app.get('/cg-dequeue/:hospital/:department', async (req, res) => {
 
     if (!consumer_id) return res.status(400).json({ error: 'consumer_id query param required' });
 
-    // Consumer must belong to the hospital they are reading from,
-    // and consumer_id must match the authenticated staff_id
     if (identity.hospital_id !== hospital || identity.staff_id !== consumer_id) {
       validationFailures.inc();
       return res.status(403).json({ error: 'Identity mismatch' });
@@ -219,8 +210,6 @@ app.get('/cg-dequeue/:hospital/:department', async (req, res) => {
 
 // -----------------------------
 // Consumer Group ACK
-// POST /cg-ack/:hospital/:department
-// 🔐 Requires JWT. consumer_id must match token's staff_id.
 // -----------------------------
 app.post('/cg-ack/:hospital/:department', async (req, res) => {
   try {
@@ -232,7 +221,6 @@ app.post('/cg-ack/:hospital/:department', async (req, res) => {
       return res.status(400).json({ error: 'consumer_id and non-empty message_ids required' });
     }
 
-    // Prevent one consumer from ACKing another consumer's messages
     if (identity.hospital_id !== hospital || identity.staff_id !== consumer_id) {
       validationFailures.inc();
       return res.status(403).json({ error: 'Identity mismatch' });
@@ -252,9 +240,7 @@ app.post('/cg-ack/:hospital/:department', async (req, res) => {
 });
 
 // -----------------------------
-// Reclaim Pending (crash recovery)
-// GET /cg-pending/:hospital/:department?consumer_id=<id>&min_idle_ms=<ms>&count=<n>
-// 🔐 Requires JWT. consumer_id must match token's staff_id.
+// Reclaim Pending
 // -----------------------------
 app.get('/cg-pending/:hospital/:department', async (req, res) => {
   try {
@@ -295,7 +281,7 @@ app.get('/cg-pending/:hospital/:department', async (req, res) => {
 });
 
 // -----------------------------
-// Metrics
+// Metrics + Health
 // -----------------------------
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', client.register.contentType);
@@ -304,4 +290,24 @@ app.get('/metrics', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(9000, () => console.log('Zero-Trust broker listening on :9000'));
+// ✅ FIX: Replace plain app.listen() with an mTLS HTTPS server.
+// The server now presents its own cert to clients AND requires clients
+// to present a cert signed by our private CA (requestCert + rejectUnauthorized).
+const CERT_PATH = process.env.MTLS_CERT_PATH;
+const KEY_PATH  = process.env.MTLS_KEY_PATH;
+const CA_PATH   = process.env.MTLS_CA_PATH;
+
+if (!CERT_PATH || !KEY_PATH || !CA_PATH) {
+  console.error('[broker] MTLS_CERT_PATH / MTLS_KEY_PATH / MTLS_CA_PATH must be set');
+  process.exit(1);
+}
+
+const server = https.createServer({
+  cert:               fs.readFileSync(CERT_PATH),
+  key:                fs.readFileSync(KEY_PATH),
+  ca:                 fs.readFileSync(CA_PATH),
+  requestCert:        true,   // ask every client for a certificate
+  rejectUnauthorized: true,   // reject clients without a CA-signed cert
+}, app);
+
+server.listen(9000, () => console.log('[broker] mTLS HTTPS server listening on :9000'));

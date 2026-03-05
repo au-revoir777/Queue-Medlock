@@ -11,24 +11,49 @@ scrape_configs:
   - job_name: 'auth-service'
     static_configs:
       - targets: ['auth-service:8000']
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      ca_file:   /certs/ca.crt
+      cert_file: /certs/prometheus.crt
+      key_file:  /certs/prometheus.key
 
   - job_name: 'tenant-service'
     static_configs:
       - targets: ['tenant-service:8000']
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      ca_file:   /certs/ca.crt
+      cert_file: /certs/prometheus.crt
+      key_file:  /certs/prometheus.key
 
   - job_name: 'kms-service'
     static_configs:
       - targets: ['kms-service:8000']
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      ca_file:   /certs/ca.crt
+      cert_file: /certs/prometheus.crt
+      key_file:  /certs/prometheus.key
 
   - job_name: 'clinical-service'
     static_configs:
       - targets: ['clinical-service:8000']
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      ca_file:   /certs/ca.crt
+      cert_file: /certs/prometheus.crt
+      key_file:  /certs/prometheus.key
 
   - job_name: 'broker'
     static_configs:
       - targets: ['broker:9000']
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      ca_file:   /certs/ca.crt
+      cert_file: /certs/prometheus.crt
+      key_file:  /certs/prometheus.key

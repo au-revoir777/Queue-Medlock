@@ -1,5 +1,5 @@
 """
-MedLock Red Team - Attacker Script
+MedLock Red Team - Attacker Script (mTLS edition)
 ====================================
 Simulates three attack vectors against the Zero-Trust broker:
 
@@ -17,14 +17,14 @@ Expected outcome for a correctly hardened broker:
 
 Results are printed as a summary table at the end.
 
-Changes from original
----------------------
-- Added post-attack liveness check that verifies legitimate simulator traffic
-  is still flowing after all attacks complete. Previously the report showed
-  all-clear even when the attacker's setup phase wiped in-memory auth/tenant
-  state and caused every simulator thread to fail with 404 on login.
-- Liveness failure is reported in the summary table and causes exit code 1.
-- No new dependencies added — uses only what the original script already imports.
+Changes from original (HTTP)
+-----------------------------
+- All URLs updated to HTTPS on port 8443 (matching mTLS deployment).
+- `import requests` replaced with `import mtls_requests as requests` — drop-in
+  wrapper; handles client cert + CA verification via env vars automatically.
+- VERIFY_SSL config and all manual verify= kwargs removed — mtls_requests
+  handles both client cert presentation and CA verification internally.
+- Post-attack liveness check updated to use mtls_requests session.
 """
 
 import os
@@ -33,7 +33,7 @@ import time
 import base64
 import hashlib
 import logging
-import requests
+import mtls_requests as requests
 from dataclasses import dataclass, field
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
@@ -53,9 +53,9 @@ log = logging.getLogger("attacker")
 # ----------------------------------------------------------------
 # Config — override via env vars
 # ----------------------------------------------------------------
-AUTH_URL = os.environ.get("AUTH_URL", "http://localhost:8000/login")
-TENANT_URL = os.environ.get("TENANT_URL", "http://localhost:8000")
-BROKER_URL = os.environ.get("BROKER_URL", "http://localhost:9000")
+AUTH_URL = os.environ.get("AUTH_URL", "https://localhost:8443/auth/login")
+TENANT_URL = os.environ.get("TENANT_URL", "https://localhost:8443")
+BROKER_URL = os.environ.get("BROKER_URL", "https://localhost:8443")
 SIM_PASSWORD = os.environ.get("SIM_PASSWORD", "simpassword")
 
 HOSPITAL = "hospital1"  # hospital the attacker legitimately belongs to
@@ -79,6 +79,9 @@ def safe_request(method: str, url: str, **kwargs):
     Always returns a response object. On exception, returns a fake
     response with status_code=0 so record() can distinguish between
     a broker rejection (real 4xx) and a network error (0/ERR).
+
+    mTLS (client cert + CA verification) is handled automatically by
+    the mtls_requests session — no extra kwargs needed here.
     """
     try:
         resp = requests.request(method, url, **kwargs)
@@ -268,7 +271,9 @@ def setup_attacker() -> StaffMember:
 
     # Register hospital (may already exist — 409 is fine)
     requests.post(
-        f"{TENANT_URL}/hospitals", json={"id": HOSPITAL, "name": HOSPITAL}, timeout=5
+        f"{TENANT_URL}/hospitals",
+        json={"id": HOSPITAL, "name": HOSPITAL},
+        timeout=5,
     )
 
     resp = requests.post(
@@ -545,17 +550,13 @@ def attack_impersonation(attacker: StaffMember):
 
 
 # ----------------------------------------------------------------
-# Post-attack liveness check (NEW)
+# Post-attack liveness check
 # ----------------------------------------------------------------
 def liveness_check() -> bool:
     """
     Verify that legitimate simulator traffic is still healthy after all attacks.
 
     Returns True if the system is live, False if it has been degraded.
-
-    This catches the failure mode where the attacker's setup phase wiped
-    in-memory auth/tenant state and every simulator thread started returning
-    404 on login — even though all individual attack probes returned 4xx.
     """
     log.info("\n=== POST-ATTACK LIVENESS CHECK ===")
     log.info("Waiting 5s for simulator threads to complete a cycle...")
@@ -714,7 +715,7 @@ def print_summary(liveness_ok: bool):
 # Entry point
 # ----------------------------------------------------------------
 if __name__ == "__main__":
-    log.info("MedLock Red Team starting...")
+    log.info("MedLock Red Team starting... mTLS mode — mtls_requests session active")
 
     attacker = setup_attacker()
 

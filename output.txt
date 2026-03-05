@@ -16,6 +16,7 @@
 │           └── nodeids
 ├── README.md
 ├── __pycache__
+│   ├── stress_test.cpython-311.pyc
 │   ├── test_consumer.cpython-311-pytest-9.0.2.pyc
 │   ├── test_full_flow.cpython-311-pytest-9.0.2.pyc
 │   ├── test_producer.cpython-311-pytest-9.0.2.pyc
@@ -28,7 +29,8 @@
 │   ├── package.json
 │   └── src
 │       ├── .eslintrc.json
-│       └── index.js
+│       ├── index.js
+│       └── mtlsClient.js
 ├── consumer_sdk
 │   ├── __init__.py
 │   ├── __pycache__
@@ -55,7 +57,8 @@
 │   ├── kms-service
 │   │   ├── Dockerfile
 │   │   ├── app
-│   │   │   └── main.py
+│   │   │   ├── main.py
+│   │   │   └── requirements.txt
 │   │   └── requirements.txt
 │   └── tenant-service
 │       ├── Dockerfile
@@ -82,28 +85,73 @@
 │   │   │   └── useWebSocket.ts
 │   │   ├── index.css
 │   │   ├── main.tsx
-│   │   └── pages
-│   │       ├── Admin.tsx
-│   │       ├── App.tsx
-│   │       ├── Cardiology.tsx
-│   │       ├── Dashboard.tsx
-│   │       ├── DeptPages.tsx
-│   │       ├── ICU.tsx
-│   │       ├── Login.tsx
-│   │       ├── Neurology.tsx
-│   │       ├── Oncology.tsx
-│   │       └── Radiology.tsx
-│   ├── tsconfig.json
-│   └── vite.config.js
+│   │   ├── pages
+│   │   │   ├── Admin.tsx
+│   │   │   ├── AuditLog.tsx
+│   │   │   ├── Cardiology.tsx
+│   │   │   ├── Compose.tsx
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── DeptPages.tsx
+│   │   │   ├── ICU.tsx
+│   │   │   ├── Login.tsx
+│   │   │   ├── Neurology.tsx
+│   │   │   ├── Oncology.tsx
+│   │   │   └── Radiology.tsx
+│   │   └── vite-env.d.ts
+│   └── tsconfig.json
 ├── infra
+│   ├── certs
+│   │   ├── auth-service
+│   │   │   ├── auth-service.crt
+│   │   │   ├── auth-service.key
+│   │   │   └── ca.crt
+│   │   ├── broker
+│   │   │   ├── broker.crt
+│   │   │   ├── broker.key
+│   │   │   └── ca.crt
+│   │   ├── ca.crt
+│   │   ├── ca.key
+│   │   ├── clinical-service
+│   │   │   ├── ca.crt
+│   │   │   ├── clinical-service.crt
+│   │   │   └── clinical-service.key
+│   │   ├── gateway
+│   │   │   ├── ca.crt
+│   │   │   ├── gateway.crt
+│   │   │   └── gateway.key
+│   │   ├── gen-certs.sh
+│   │   ├── kms-service
+│   │   │   ├── ca.crt
+│   │   │   ├── kms-service.crt
+│   │   │   └── kms-service.key
+│   │   ├── simulator
+│   │   │   ├── ca.crt
+│   │   │   ├── simulator.crt
+│   │   │   └── simulator.key
+│   │   ├── tenant-service
+│   │   │   ├── ca.crt
+│   │   │   ├── tenant-service.crt
+│   │   │   └── tenant-service.key
+│   │   └── verify-certs.sh
+│   ├── grafana
+│   │   └── provisioning
+│   │       ├── dashboards
+│   │       │   ├── medlock.json
+│   │       │   └── provider.yml
+│   │       └── datasources
+│   │           └── prometheus.yml
 │   ├── nginx
-│   │   └── default.conf
+│   │   ├── default.conf
+│   │  
 │   ├── prometheus.yml
 │   └── schema.sql
+├── liboqs
 ├── mobile-client
 │   ├── lib
 │   │   └── main.dart
 │   └── pubspec.yaml
+├── mtls
+│   └── mtls_requests.py
 ├── openapi.json
 ├── output.txt
 ├── producer_sdk
@@ -122,20 +170,23 @@
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       └── seed.py
-├── send_receive_live.py
-├── send_receive_live_multi.py
-├── send_receive_live_stress.py
-├── send_receive_live_super_stress.py
-├── simulation.py
 ├── simulator
 │   ├── Dockerfile
 │   ├── __pycache__
 │   │   └── simulator.cpython-311.pyc
 │   ├── requirements.txt
 │   └── simulator.py
-├── test_consumer.py
-├── test_full_flow.py
-├── test_producer.py
-└── test_simulator.py
+├── stress_test.py
+├── stress_test_results.json
+└── unit-tests
+    ├── send_receive_live.py
+    ├── send_receive_live_multi.py
+    ├── send_receive_live_stress.py
+    ├── send_receive_live_super_stress.py
+    ├── simulation.py
+    ├── test_consumer.py
+    ├── test_full_flow.py
+    ├── test_producer.py
+    └── test_simulator.py
 
-1212 directories, 10664 files
+1226 directories, 13301 files

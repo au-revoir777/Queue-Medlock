@@ -28,7 +28,7 @@ clinical_records table. Patients are seeded on startup from _PATIENTS list.
 
 import json
 import os
-import requests
+import mtls_requests as requests
 import random
 import time
 import threading
@@ -967,7 +967,6 @@ def process_items(items, *, hospital_id, dept, consumer_id, consumer):
                     "Decrypted [%s/%s] %s — %s", hospital_id, dept, msg_type, patient
                 )
 
-                # ✅ Write decrypted record to Postgres
                 write_clinical_record(
                     hospital_id=hospital_id,
                     department=dept,
@@ -1089,6 +1088,20 @@ def simulate_department(hospital_id: str, dept: str):
                             hospital_id,
                             dept,
                         )
+                        # ---- FIX: re-sync sequence on replay detection ----
+                        if resp.status_code == 409:
+                            resynced = (
+                                get_last_sequence(hospital_id, producer.staff_id) + 1
+                            )
+                            log.warning(
+                                "Replay detected — resyncing sequence %d → %d [%s/%s]",
+                                producer.sequence,
+                                resynced,
+                                hospital_id,
+                                dept,
+                            )
+                            producer.sequence = resynced
+                        # ---------------------------------------------------
                 except requests.exceptions.Timeout:
                     log.warning("Enqueue timed out [%s/%s]", hospital_id, dept)
                 except Exception as exc:

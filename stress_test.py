@@ -18,12 +18,17 @@ import sys
 from dataclasses import dataclass, field
 from typing import List
 
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # ----------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------
 
-AUTH_URL = "http://localhost:8000"
-CLINICAL_URL = "http://localhost:8003"
+AUTH_URL = "https://localhost:8443/auth"
+CLINICAL_URL = "https://localhost:8443/clinical"
+VERIFY_SSL = "infra/certs/ca.crt"
 
 DURATION_SECONDS = 30
 THREAD_COUNTS = {
@@ -189,6 +194,7 @@ def get_tokens() -> dict:
                     "password": acct["password"],
                 },
                 timeout=5,
+                verify=VERIFY_SSL,
             )
             if resp.status_code == 200:
                 tokens[acct["staff_id"]] = {
@@ -222,6 +228,7 @@ def worker_login(result, stop_event, tokens):
                     "password": acct["password"],
                 },
                 timeout=5,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             result.record(ms, error=(resp.status_code != 200))
@@ -236,7 +243,10 @@ def worker_validate(result, stop_event, tokens):
         t0 = time.perf_counter()
         try:
             resp = requests.post(
-                f"{AUTH_URL}/validate", json={"token": token}, timeout=5
+                f"{AUTH_URL}/validate",
+                json={"token": token},
+                timeout=5,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             result.record(ms, error=(resp.status_code != 200))
@@ -254,6 +264,7 @@ def worker_records_dept(result, stop_event, tokens):
                 f"{CLINICAL_URL}/records/{acct['hospital_id']}/{acct['department']}?limit=20",
                 headers={"Authorization": f"Bearer {acct['token']}"},
                 timeout=5,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             result.record(ms, error=(resp.status_code != 200))
@@ -270,6 +281,7 @@ def worker_records_hospital(result, stop_event, tokens):
                 f"{CLINICAL_URL}/records/{acct['hospital_id']}?limit=50",
                 headers={"Authorization": f"Bearer {acct['token']}"},
                 timeout=5,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             # 403 is valid for non-admin hitting hospital-wide — not an error
@@ -305,6 +317,7 @@ def worker_send_permitted(result, stop_event, tokens):
                     "urgent": random.random() < 0.1,
                 },
                 timeout=10,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             result.record(ms, error=(resp.status_code != 200))
@@ -341,6 +354,7 @@ def worker_send_blocked(result, stop_event, tokens):
                     "urgent": False,
                 },
                 timeout=5,
+                verify=VERIFY_SSL,
             )
             ms = (time.perf_counter() - t0) * 1000
             # 403 is the CORRECT and expected response — not counted as error
@@ -465,7 +479,9 @@ if __name__ == "__main__":
     print("Phase 1 — Pre-flight checks")
     for name, url in [("Auth service", AUTH_URL), ("Clinical service", CLINICAL_URL)]:
         try:
-            requests.get(f"{url}/health", timeout=3).raise_for_status()
+            requests.get(
+                f"{url}/health", timeout=3, verify=VERIFY_SSL
+            ).raise_for_status()
             print(f"  ✓ {name} reachable")
         except Exception as e:
             print(f"  ✗ {name} unreachable: {e}")

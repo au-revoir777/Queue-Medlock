@@ -8,3 +8,15 @@ __pycache__/
 
 liboqs/
 frontend/node_modules/
+infra/certs/auth-service/
+infra/certs/broker/
+infra/certs/clinical-service/
+infra/certs/gateway/
+infra/certs/kms-service/
+infra/certs/prometheus/
+infra/certs/simulator/
+infra/certs/seed/
+infra/certs/tenant-service/
+infra/certs/ca.crt
+infra/certs/ca.key
+infra/certs/ca.srl
