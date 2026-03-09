@@ -1,5 +1,6 @@
-fastapi==0.111.0
-uvicorn==0.30.1
-pydantic==2.8.2
-PyJWT==2.8.0
+fastapi
+uvicorn[standard]
+pydantic
 prometheus-client
+psycopg2-binary
+requests

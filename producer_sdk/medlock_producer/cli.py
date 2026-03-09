@@ -28,6 +28,7 @@ def main():
     )
 
     body = {
+        "hospital": args.hospital,  # was missing — broker returns 400 without this
         "department": args.department,
         "producer_id": args.producer_id,
         "sequence": args.sequence,
