@@ -20,3 +20,6 @@ infra/certs/tenant-service/
 infra/certs/ca.crt
 infra/certs/ca.key
 infra/certs/ca.srl
+
+localhost+2.pem
+localhost+2-key.pem
