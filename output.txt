@@ -1,0 +1,216 @@
+.
+├── .env
+├── .git
+├── .github
+│   └── workflows
+│       └── ci.yml
+├── .gitignore
+├── .gitleaks.toml
+├── .pre-commit-config.yaml
+├── .pytest_cache
+│   ├── .gitignore
+│   ├── CACHEDIR.TAG
+│   ├── README.md
+│   └── v
+│       └── cache
+│           ├── lastfailed
+│           └── nodeids
+├── README.md
+├── __pycache__
+│   ├── attacker.cpython-311.pyc
+│   ├── attacker2.cpython-311.pyc
+│   ├── stress_test.cpython-311.pyc
+│   ├── test_consumer.cpython-311-pytest-9.0.2.pyc
+│   ├── test_full_flow.cpython-311-pytest-9.0.2.pyc
+│   ├── test_producer.cpython-311-pytest-9.0.2.pyc
+│   └── test_simulator.cpython-311-pytest-9.0.2.pyc
+├── assets
+│   ├── Screenshot 2026-03-05 204633.png
+│   ├── Screenshot 2026-03-05 204705.png
+│   ├── Screenshot 2026-03-05 204720.png
+│   ├── Screenshot 2026-03-05 204750.png
+│   ├── Screenshot 2026-03-05 204806.png
+│   ├── Screenshot 2026-03-05 204822.png
+│   └── Screenshot 2026-03-05 204837.png
+├── attacker.py
+├── attacker2.py
+├── attacker3.py
+├── broker
+│   ├── Dockerfile
+│   ├── eslint.config.mjs
+│   ├── package-lock.json
+│   ├── package.json
+│   └── src
+│       ├── .eslintrc.json
+│       ├── index.js
+│       └── mtlsClient.js
+├── consumer_sdk
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   └── __init__.cpython-311.pyc
+│   ├── medlock_consumer
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-311.pyc
+│   │   │   └── crypto.cpython-311.pyc
+│   │   ├── cli.py
+│   │   └── crypto.py
+│   └── requirements.txt
+├── control-plane
+│   ├── auth-service
+│   │   ├── Dockerfile
+│   │   ├── app
+│   │   │   └── main.py
+│   │   └── requirements.txt
+│   ├── clinical-service
+│   │   ├── Dockerfile
+│   │   ├── app
+│   │   │   └── main.py
+│   │   └── requirements.txt
+│   ├── kms-service
+│   │   ├── Dockerfile
+│   │   ├── app
+│   │   │   └── main.py
+│   │   └── requirements.txt
+│   └── tenant-service
+│       ├── Dockerfile
+│       ├── app
+│       │   └── main.py
+│       └── requirements.txt
+├── docker-compose.yml
+├── frontend
+│   ├── .env
+│   ├── Dockerfile
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── src
+│   │   ├── App.tsx
+│   │   ├── api.ts
+│   │   ├── components
+│   │   │   ├── Layout.tsx
+│   │   │   ├── PageHeader.tsx
+│   │   │   └── RecordFeed.tsx
+│   │   ├── context
+│   │   │   └── AuthContext.tsx
+│   │   ├── hooks
+│   │   │   └── useWebSocket.ts
+│   │   ├── index.css
+│   │   ├── main.tsx
+│   │   ├── pages
+│   │   │   ├── Admin.tsx
+│   │   │   ├── AuditLog.tsx
+│   │   │   ├── Cardiology.tsx
+│   │   │   ├── Compose.tsx
+│   │   │   ├── Dashboard.tsx
+│   │   │   ├── DeptPages.tsx
+│   │   │   ├── ICU.tsx
+│   │   │   ├── Login.tsx
+│   │   │   ├── Neurology.tsx
+│   │   │   ├── Oncology.tsx
+│   │   │   └── Radiology.tsx
+│   │   └── vite-env.d.ts
+│   └── tsconfig.json
+├── infra
+│   ├── certs
+│   │   ├── auth-service
+│   │   │   ├── auth-service.crt
+│   │   │   ├── auth-service.key
+│   │   │   └── ca.crt
+│   │   ├── broker
+│   │   │   ├── broker.crt
+│   │   │   ├── broker.key
+│   │   │   └── ca.crt
+│   │   ├── ca.crt
+│   │   ├── ca.key
+│   │   ├── ca.srl
+│   │   ├── clinical-service
+│   │   │   ├── ca.crt
+│   │   │   ├── clinical-service.crt
+│   │   │   └── clinical-service.key
+│   │   ├── gateway
+│   │   │   ├── ca.crt
+│   │   │   ├── gateway.crt
+│   │   │   └── gateway.key
+│   │   ├── gen-certs.sh
+│   │   ├── kms-service
+│   │   │   ├── ca.crt
+│   │   │   ├── kms-service.crt
+│   │   │   └── kms-service.key
+│   │   ├── policy-service
+│   │   │   ├── ca.crt
+│   │   │   ├── policy-service.crt
+│   │   │   └── policy-service.key
+│   │   ├── prometheus
+│   │   │   ├── ca.crt
+│   │   │   ├── prometheus.crt
+│   │   │   └── prometheus.key
+│   │   ├── seed
+│   │   │   ├── ca.crt
+│   │   │   ├── seed.crt
+│   │   │   └── seed.key
+│   │   ├── simulator
+│   │   │   ├── ca.crt
+│   │   │   ├── simulator.crt
+│   │   │   └── simulator.key
+│   │   ├── tenant-service
+│   │   │   ├── ca.crt
+│   │   │   ├── tenant-service.crt
+│   │   │   └── tenant-service.key
+│   │   └── verify-certs.sh
+│   ├── grafana
+│   │   └── provisioning
+│   │       ├── dashboards
+│   │       │   ├── medlock.json
+│   │       │   └── provider.yml
+│   │       └── datasources
+│   │           └── prometheus.yml
+│   ├── nginx
+│   │   └── default.conf
+│   ├── prometheus.yml
+│   └── schema.sql
+├── liboqs
+├── localhost+2-key.pem
+├── localhost+2.pem
+├── mobile-client
+│   ├── lib
+│   │   └── main.dart
+│   └── pubspec.yaml
+├── mtls
+│   └── mtls_requests.py
+├── openapi.json
+├── output.txt
+├── producer_sdk
+│   ├── medlock_producer
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-311.pyc
+│   │   │   ├── cli.cpython-311.pyc
+│   │   │   └── crypto.cpython-311.pyc
+│   │   ├── cli.py
+│   │   └── crypto.py
+│   └── requirements.txt
+├── scripts
+│   ├── gen_keys.py
+│   └── seed
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       └── seed.py
+├── simulator
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── simulator.py
+├── stress_test.py
+├── stress_test_results.json
+└── unit-tests
+    ├── send_receive_live.py
+    ├── send_receive_live_multi.py
+    ├── send_receive_live_stress.py
+    ├── send_receive_live_super_stress.py
+    ├── simulation.py
+    ├── test_consumer.py
+    ├── test_full_flow.py
+    ├── test_producer.py
+    └── test_simulator.py
+
+1230 directories, 13518 files

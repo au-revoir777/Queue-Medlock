@@ -1,0 +1,6 @@
+System,Crypto Scheme,RPS (Validate),p95 Latency (ms),Crypto-Agility,ZTA Compliance,Formal Proof
+MedLock,ML-KEM-768 + X25519,374,605,\cmark Full,\cmark Full,\cmark ProVerif
+QuantumChat,NTRU-HPS,210,480,\xmark None,\xmark None,\xmark None
+EHR-PQC,ML-DSA-65 (Dilithium),165,720,\cmark Partial,\cmark Partial,\xmark None
+Hypercare,TLS 1.3 (ECDHE),750,85,\xmark None,\cmark Partial,\xmark None
+HL7 FHIR,TLS 1.2/1.3,620,110,\xmark None,\xmark None,\xmark None

@@ -1,0 +1,40 @@
+diff --git a/control-plane/auth-service/app/main.py b/control-plane/auth-service/app/main.py
+index abc1234..def5678 100644
+--- a/control-plane/auth-service/app/main.py
++++ b/control-plane/auth-service/app/main.py
+@@ -46,11 +46,16 @@
+ """
+
+ from fastapi import FastAPI, Response, HTTPException
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel
+ from prometheus_client import Counter, generate_latest
+ from contextlib import contextmanager
+ import hashlib, time, os, threading, asyncio
+ import psycopg2, psycopg2.extras, psycopg2.pool
+ import mtls_requests as requests  # replaces: import requests
++
++# Rate Limiter (Redis-backed token bucket)
++REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
++ENABLE_RATE_LIMITER = os.environ.get("ENABLE_RATE_LIMITER", "true").lower() == "true"
+
+ app = FastAPI(title="MedLock Auth Service")
+ app.add_middleware(
+@@ -61,6 +66,15 @@
+     allow_headers=["*"],
+ )
+
++# ----------------------------------------------------------------
++# Rate Limiter Middleware (Token Bucket — 100 req/min per key)
++# ----------------------------------------------------------------
++if ENABLE_RATE_LIMITER:
++    try:
++        from auth.rate_limiter import attach_rate_limiter
++        attach_rate_limiter(app, redis_url=REDIS_URL)
++        print("[auth] Rate limiter attached (Redis-backed token bucket)")
++    except Exception as exc:
++        print(f"[auth] Rate limiter disabled: {exc}")
++
+ DATABASE_URL = os.environ.get("DATABASE_URL", "")
+ TOKEN_TTL_SECONDS = 3600
+ TOKEN_CACHE_TTL = int(os.environ.get("TOKEN_CACHE_TTL", "120"))

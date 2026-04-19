@@ -1,0 +1,7 @@
+title = "Project Gitleaks Config"
+
+[allowlist]
+description = "Allow generated signing key object variable"
+regexes = [
+  '''sign_key_obj'''
+]

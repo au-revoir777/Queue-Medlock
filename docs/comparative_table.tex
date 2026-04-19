@@ -1,0 +1,35 @@
+% MedLock Comparative Analysis — Auto-generated
+% Required preamble:
+\usepackage{booktabs}
+\usepackage{colortbl}
+\usepackage{xcolor}
+\usepackage{amssymb}
+\newcommand{\cmark}{\textcolor{green!60!black}{\checkmark}}
+\newcommand{\xmark}{\textcolor{red!70!black}{$\times$}}
+
+\begin{table*}[htbp]
+\centering
+\caption{Comparative Analysis of Secure Clinical Messaging Systems}
+\label{tab:comparative-analysis}
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{l l r r c c c}
+\toprule
+\textbf{System} & \textbf{Crypto Scheme} & \textbf{RPS} & \textbf{p95 (ms)} & \textbf{Crypto-Agility} & \textbf{ZTA} & \textbf{Formal Proof} \\
+\midrule
+\rowcolor{blue!8}
+\textbf{MedLock} & ML-KEM-768 + X25519 & 374 & 605 & \cmark Full & \cmark Full & \cmark ProVerif \\
+QuantumChat & NTRU-HPS & 210 & 480 & \xmark None & \xmark None & \xmark None \\
+EHR-PQC & ML-DSA-65 (Dilithium) & 165 & 720 & \cmark Partial & \cmark Partial & \xmark None \\
+Hypercare & TLS 1.3 (ECDHE) & 750 & 85 & \xmark None & \cmark Partial & \xmark None \\
+HL7 FHIR & TLS 1.2/1.3 & 620 & 110 & \xmark None & \xmark None & \xmark None \\
+\bottomrule
+\end{tabular}
+\vspace{4pt}
+\begin{flushleft}
+\footnotesize
+\textit{Note:} RPS measured at peak concurrent load (15 threads). Latency is p95 end-to-end.
+Crypto-agility indicates the ability to swap cryptographic primitives without protocol changes.
+ZTA compliance requires per-request authentication, least-privilege access, and micro-segmentation.
+\end{flushleft}
+\end{table*}

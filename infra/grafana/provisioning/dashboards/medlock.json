@@ -1,0 +1,331 @@
+{
+  "uid": "medlock-main",
+  "title": "MedLock — Zero Trust Clinical Platform",
+  "tags": ["medlock", "zero-trust", "healthcare"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "row",
+      "title": "SYSTEM HEALTH",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Auth Service — Request Rate",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area", "textMode": "auto" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] }
+        }
+      },
+      "targets": [{ "expr": "rate(auth_http_requests_total[1m])", "legendFormat": "req/s", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Clinical Service — Request Rate",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 500 }] }
+        }
+      },
+      "targets": [{ "expr": "rate(clinical_http_requests_total[1m])", "legendFormat": "req/s", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Auth Failures",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 20 }] }
+        }
+      },
+      "targets": [{ "expr": "increase(auth_auth_failures_total[5m])", "legendFormat": "failures / 5m", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "RBAC Send Blocks",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 10 }] }
+        }
+      },
+      "targets": [{ "expr": "increase(clinical_send_blocked_total[5m])", "legendFormat": "blocked / 5m", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Messages Sent by Staff",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "targets": [{ "expr": "increase(clinical_messages_sent_total[5m])", "legendFormat": "sent / 5m", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Active WebSocket Connections",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }] }
+        }
+      },
+      "targets": [{ "expr": "increase(clinical_ws_connections_total[1m])", "legendFormat": "new conns/min", "datasource": "Prometheus" }],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 10,
+      "type": "row",
+      "title": "AUTH SERVICE",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Login Rate — Success vs Failure",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "failures" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "successes" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(rate(auth_login_success_total[1m]))", "legendFormat": "successes", "datasource": "Prometheus" },
+        { "expr": "sum(rate(auth_login_failure_total[1m]))", "legendFormat": "failures", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Auth Failures Over Time",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 15 }, "color": { "fixedColor": "red", "mode": "fixed" } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "increase(auth_auth_failures_total[1m])", "legendFormat": "auth failures / min", "datasource": "Prometheus" },
+        { "expr": "increase(clinical_auth_failures_total[1m])", "legendFormat": "clinical auth failures / min", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 20,
+      "type": "row",
+      "title": "CLINICAL SERVICE — RECORDS & MESSAGING",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Records Served by Department",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "expr": "rate(clinical_records_served_total[1m])", "legendFormat": "{{hospital_id}} / {{department}}", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Messages Sent by Staff — Rate",
+      "gridPos": { "x": 12, "y": 15, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "expr": "rate(clinical_messages_sent_total[1m])", "legendFormat": "{{hospital_id}} / {{department}} ({{role}})", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 30,
+      "type": "row",
+      "title": "ZERO TRUST ENFORCEMENT",
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "RBAC Blocks by Reason",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 15 }, "color": { "fixedColor": "orange", "mode": "fixed" } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "expr": "increase(clinical_send_blocked_total[1m])", "legendFormat": "{{reason}} ({{role}})", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 32,
+      "type": "piechart",
+      "title": "Send Blocks by Reason (total)",
+      "gridPos": { "x": 12, "y": 24, "w": 6, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        { "expr": "sum by (reason) (clinical_send_blocked_total)", "legendFormat": "{{reason}}", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 33,
+      "type": "piechart",
+      "title": "Logins by Hospital",
+      "gridPos": { "x": 18, "y": 24, "w": 6, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        { "expr": "sum by (hospital_id) (auth_login_success_total)", "legendFormat": "{{hospital_id}}", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 40,
+      "type": "row",
+      "title": "BROKER & THROUGHPUT",
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "Broker — HTTP Request Rate",
+      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(broker_http_requests_total[1m])", "legendFormat": "broker req/s", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "WebSocket Connections Opened",
+      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        { "expr": "increase(clinical_ws_connections_total[1m])", "legendFormat": "{{hospital_id}} / {{department}}", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 50,
+      "type": "row",
+      "title": "REGISTRATIONS & KMS",
+      "gridPos": { "x": 0, "y": 41, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "User Registrations Over Time",
+      "gridPos": { "x": 0, "y": 42, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "increase(auth_registrations_total[5m])", "legendFormat": "registrations / 5m ({{hospital_id}})", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    },
+
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Clinical Service — Total Request Rate",
+      "gridPos": { "x": 12, "y": 42, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 8 } }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(clinical_http_requests_total[1m])", "legendFormat": "clinical req/s", "datasource": "Prometheus" },
+        { "expr": "rate(auth_http_requests_total[1m])", "legendFormat": "auth req/s", "datasource": "Prometheus" }
+      ],
+      "datasource": "Prometheus"
+    }
+
+  ]
+}
